@@ -1,0 +1,13 @@
+[application]
+name = "AppScreens"
+default_platform = "desktop"
+
+[mobile]
+title = "AppScreens"
+bundle_identifier = "com.mayorana.appscreens"
+
+[android]
+min_sdk_version = 24
+
+[web.app]
+title = "AppScreens"
