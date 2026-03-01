@@ -5,8 +5,7 @@ use dioxus::desktop::{use_asset_handler, LogicalSize, WindowBuilder};
 use dioxus::prelude::*;
 use image::imageops::FilterType;
 use image::{Rgba, RgbaImage};
-use imageproc::drawing::{draw_filled_rect_mut, draw_text_mut, text_size};
-use imageproc::rect::Rect;
+use imageproc::drawing::{draw_text_mut, text_size};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -33,6 +32,7 @@ const LOCALES: &[(&str, &str)] = &[
 const IOS_TARGETS: &[(&str, &str, u32, u32)] = &[
     ("ios_iphone_69", "iPhone 6.9\" Display", 1320, 2868),
     ("ios_iphone_67", "iPhone 6.7\" Display", 1290, 2796),
+    ("ios_iphone_65", "iPhone 6.5\" Display", 1242, 2688),
     ("ios_ipad_129", "iPad Pro (12.9-inch)", 2048, 2732),
 ];
 
@@ -58,12 +58,16 @@ struct Settings {
     apple_identity: String,   // "Apple Distribution: Name (TEAMID)"
     #[serde(default)]
     provisioning_profile: String, // absolute path to .mobileprovision
-    #[serde(default)]
+    #[serde(default = "default_ios_short_version")]
     ios_short_version: String,    // e.g. "1.0"
 }
 
 fn default_phone_style() -> String {
     "modern smartphone".to_string()
+}
+
+fn default_ios_short_version() -> String {
+    "1.0".to_string()
 }
 
 impl Default for Settings {
@@ -1243,136 +1247,183 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
             publish_log.set(Vec::new());
             output_tab.set(OutputTab::Publish);
 
-            let fastlane_dir = proj_dir.clone();
+            // Snapshot project state needed inside the async block.
+            let bundle_id    = proj.read().bundle_id.clone();
+            let locales      = proj.read().locales.clone();
+            let output_paths = proj.read().output_paths.clone();
+            let app_name     = proj.read().app_name.clone();
+            let ios_version  = { let v = settings.read().ios_short_version.clone(); if v.is_empty() { "1.0".to_string() } else { v } };
+            let proj_dir     = proj_dir.clone();
+            let fastlane_ios = proj_dir.join("fastlane").join("screenshots").join("ios");
+
             spawn(async move {
-                use std::io::{BufRead, BufReader};
-                use std::process::Stdio;
-                use std::sync::mpsc;
+                let mut log = publish_log.clone();
+                let mut push = |msg: &str| log.write().push(msg.to_string());
 
-                // Load .env from AppScreens binary dir and project dir (project wins).
-                let env_overrides = load_env(&[
-                    fastlane_dir.join(".env"),
-                    fastlane_dir.join("fastlane").join(".env"),
+                // ── 1. Load credentials ───────────────────────────────────────
+                let env = load_env(&[
+                    proj_dir.join(".env"),
+                    proj_dir.join("fastlane").join(".env"),
                 ]);
-
-                // Helper: resolve a key from merged .env or the process environment.
                 let resolve = |key: &str| -> Option<String> {
-                    env_overrides.get(key).cloned()
+                    env.get(key).cloned()
                         .or_else(|| std::env::var(key).ok())
                         .filter(|v| !v.is_empty())
                 };
+                let key_id = match resolve("APP_STORE_CONNECT_API_KEY_KEY_ID") {
+                    Some(v) => v,
+                    None => { publish_phase.set(PublishPhase::Error("Missing APP_STORE_CONNECT_API_KEY_KEY_ID in .env".into())); return; }
+                };
+                let issuer_id = match resolve("APP_STORE_CONNECT_API_KEY_ISSUER_ID") {
+                    Some(v) => v,
+                    None => { publish_phase.set(PublishPhase::Error("Missing APP_STORE_CONNECT_API_KEY_ISSUER_ID in .env".into())); return; }
+                };
+                let key_path = match resolve("APP_STORE_CONNECT_API_KEY_KEY_FILEPATH") {
+                    Some(v) => v,
+                    None => { publish_phase.set(PublishPhase::Error("Missing APP_STORE_CONNECT_API_KEY_KEY_FILEPATH in .env".into())); return; }
+                };
+                let p8_pem = match std::fs::read_to_string(&key_path) {
+                    Ok(s) => s,
+                    Err(e) => { publish_phase.set(PublishPhase::Error(format!("Cannot read .p8 key at {key_path}: {e}"))); return; }
+                };
 
-                // Validate required App Store Connect API key env vars before running fastlane.
-                const REQUIRED: &[&str] = &[
-                    "APP_STORE_CONNECT_API_KEY_KEY_ID",
-                    "APP_STORE_CONNECT_API_KEY_ISSUER_ID",
-                    "APP_STORE_CONNECT_API_KEY_KEY_FILEPATH",
-                ];
-                let missing: Vec<&str> = REQUIRED.iter()
-                    .copied()
-                    .filter(|k| resolve(k).is_none())
-                    .collect();
-                if !missing.is_empty() {
-                    let msg = format!(
-                        "Missing required environment variables:\n{}\n\nSet them in fastlane/.env or export them before launching the app.",
-                        missing.iter().map(|k| format!("  • {k}")).collect::<Vec<_>>().join("\n")
-                    );
-                    publish_phase.set(PublishPhase::Error(msg));
-                    return;
+                // ── 2. Mint App Store Connect JWT ─────────────────────────────
+                push("🔑 Authenticating with App Store Connect…");
+                let jwt = match asc_mint_jwt(&key_id, &issuer_id, &p8_pem) {
+                    Ok(t) => t,
+                    Err(e) => { publish_phase.set(PublishPhase::Error(format!("JWT error: {e}"))); return; }
+                };
+                push("✅ Authenticated");
+
+                // ── 3. Find the app by bundle ID ──────────────────────────────
+                push(&format!("🔍 Looking up app: {bundle_id}"));
+                let app_id = match asc_find_app(&jwt, &bundle_id).await {
+                    Ok(id) => id,
+                    Err(e) => { publish_phase.set(PublishPhase::Error(format!("App lookup failed: {e}"))); return; }
+                };
+                push(&format!("   App ID: {app_id}"));
+
+                // ── 4. Find or create the latest editable version ─────────────
+                push("🔍 Finding (or creating) app version…");
+                let version_id = match asc_find_or_create_version(&jwt, &app_id, &ios_version).await {
+                    Ok(id) => id,
+                    Err(e) => { publish_phase.set(PublishPhase::Error(format!("Version lookup failed: {e}"))); return; }
+                };
+                push(&format!("   Version ID: {version_id}"));
+
+                // ── 5. Get localizations for this version ─────────────────────
+                push("🌐 Fetching localizations…");
+                let loc_map = match asc_get_localizations(&jwt, &version_id).await {
+                    Ok(m) => m,
+                    Err(e) => { publish_phase.set(PublishPhase::Error(format!("Localization fetch failed: {e}"))); return; }
+                };
+                push(&format!("   Found localizations: {}", loc_map.keys().cloned().collect::<Vec<_>>().join(", ")));
+
+                // ── 5b. Ensure every localization has the correct app name ─────
+                if !app_name.is_empty() {
+                    push(&format!("✏️  Setting app name to \"{app_name}\" on all localizations…"));
+                    for (locale, loc_id) in &loc_map {
+                        if let Err(e) = asc_set_localization_name(&jwt, loc_id, &app_name).await {
+                            push(&format!("   ⚠️  Could not set name for {locale}: {e}"));
+                        }
+                    }
                 }
 
-                // Spawn the fastlane process on a plain OS thread (Dioxus Signals are
-                // !Send so they can't enter tokio::spawn_blocking).  Lines are sent back
-                // to this async task via an mpsc channel and pushed into the signal here,
-                // on the UI thread, so Dioxus re-renders after every poll interval.
-                let (tx, rx) = mpsc::channel::<Result<String, String>>();
+                // ── 6. For each locale × device type: upload screenshots ──────
+                // Map IOS_TARGETS device folder names to ASC screenshotDisplayType values.
+                // https://developer.apple.com/documentation/appstoreconnectapi/screenshotdisplaytype
+                let device_types: &[(&str, &str)] = &[
+                    ("iPhone 6.9\" Display", "APP_IPHONE_69"),
+                    ("iPhone 6.7\" Display", "APP_IPHONE_67"),
+                    ("iPhone 6.5\" Display", "APP_IPHONE_65"),
+                    ("iPad Pro (12.9-inch)", "APP_IPAD_PRO_3GEN_129"),
+                ];
 
-                let env_overrides_clone = env_overrides.clone();
-                std::thread::spawn(move || {
-                    // Resolve the full path to `bundle` so the subprocess finds it even
-                    // when launched from a GUI context (launchd strips PATH to /usr/bin etc).
-                    // Walk the shell PATH to find `bundle`, falling back to known RVM location.
-                    let bundle_bin = std::env::var("PATH")
-                        .unwrap_or_default()
-                        .split(':')
-                        .map(|dir| std::path::PathBuf::from(dir).join("bundle"))
-                        .find(|p| p.is_file())
-                        .unwrap_or_else(|| {
-                            // Hardcoded RVM fallback
-                            std::path::PathBuf::from(
-                                std::env::var("HOME").unwrap_or_else(|_| "/Users/mb".into())
-                            )
-                            .join(".rvm/gems/ruby-3.2.2/bin/bundle")
-                        });
+                let upload_locales: Vec<String> = if locales.is_empty() {
+                    vec!["en-US".to_string()]
+                } else {
+                    locales.clone()
+                };
 
-                    let mut cmd = std::process::Command::new(&bundle_bin);
-                    cmd.args(["exec", "fastlane", "upload_screenshots"])
-                       .current_dir(&fastlane_dir)
-                       .env("FASTLANE_HIDE_CHANGELOG", "1")
-                       .env("FASTLANE_SKIP_UPDATE_CHECK", "1")
-                       .env("CI", "1")
-                       // Forward the current PATH so bundle/ruby/fastlane can find their deps
-                       .env("PATH", std::env::var("PATH").unwrap_or_default())
-                       .stdout(Stdio::piped())
-                       .stderr(Stdio::piped());
-                    for (k, v) in &env_overrides_clone {
-                        cmd.env(k, v);
-                    }
-
-                    let mut child = match cmd.spawn() {
-                        Ok(c) => c,
-                        Err(e) => { let _ = tx.send(Err(format!("spawn: {e}"))); return; }
+                for locale in &upload_locales {
+                    let loc_id = match loc_map.get(locale.as_str()) {
+                        Some(id) => id.clone(),
+                        None => {
+                            push(&format!("⚠️  No localization found for {locale} — skipping (create it in App Store Connect first)"));
+                            continue;
+                        }
                     };
+                    push(&format!("─── Locale: {locale} (loc_id: {loc_id}) ───"));
 
-                    // Pipe stderr on its own thread; send lines into the same channel.
-                    let tx2 = tx.clone();
-                    let stderr_stream = child.stderr.take();
-                    std::thread::spawn(move || {
-                        if let Some(r) = stderr_stream.map(BufReader::new) {
-                            for line in r.lines().map_while(Result::ok) {
-                                let _ = tx2.send(Ok(line));
-                            }
-                        }
-                    });
+                    for (device_name, display_type) in device_types {
+                        // Collect screenshot files for this locale + device from output_paths,
+                        // then fall back to the fastlane screenshots folder.
+                        let mut files: Vec<PathBuf> = output_paths.iter()
+                            .filter(|(label, path)| {
+                                label.contains(device_name) && label.contains(locale.as_str()) && path.exists()
+                            })
+                            .map(|(_, p)| p.clone())
+                            .collect();
 
-                    if let Some(stdout) = child.stdout.take() {
-                        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                            let _ = tx.send(Ok(line));
-                        }
-                    }
-
-                    match child.wait() {
-                        Ok(s) if s.success() => { let _ = tx.send(Err("__ok__".into())); }
-                        Ok(s) => { let _ = tx.send(Err(format!("fastlane exited with code {}", s.code().unwrap_or(-1)))); }
-                        Err(e) => { let _ = tx.send(Err(format!("wait: {e}"))); }
-                    }
-                });
-
-                // Poll the channel from the async task so we can write to the Signal
-                // (which lives on the UI thread) without crossing thread boundaries.
-                loop {
-                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                    let mut done = false;
-                    for msg in rx.try_iter() {
-                        match msg {
-                            Ok(line) => {
-                                let clean = strip_ansi(&line);
-                                if !clean.trim().is_empty() {
-                                    publish_log.write().push(clean);
+                        if files.is_empty() {
+                            // Fallback: fastlane/screenshots/ios/<locale>/<device_name>-*.png
+                            let dir = fastlane_ios.join(locale);
+                            if dir.exists() {
+                                if let Ok(entries) = std::fs::read_dir(&dir) {
+                                    let mut found: Vec<PathBuf> = entries
+                                        .flatten()
+                                        .map(|e| e.path())
+                                        .filter(|p| {
+                                            p.file_name()
+                                                .and_then(|n| n.to_str())
+                                                .map(|n| n.starts_with(device_name) && n.ends_with(".png"))
+                                                .unwrap_or(false)
+                                        })
+                                        .collect();
+                                    found.sort();
+                                    files = found;
                                 }
                             }
-                            Err(sentinel) if sentinel == "__ok__" => {
-                                publish_phase.set(PublishPhase::Success);
-                                done = true;
+                        }
+
+                        if files.is_empty() {
+                            push(&format!("   ⏭  No files for {device_name} [{locale}] — skipping"));
+                            continue;
+                        }
+
+                        push(&format!("   📱 {device_name} — {} screenshot(s)", files.len()));
+
+                        // Get or create screenshot set for this localization + display type.
+                        let set_id = match asc_get_or_create_screenshot_set(&jwt, &loc_id, display_type).await {
+                            Ok(id) => id,
+                            Err(e) => {
+                                publish_phase.set(PublishPhase::Error(format!("[{locale}] {device_name}: screenshot set error: {e}")));
+                                return;
                             }
-                            Err(err_msg) => {
-                                publish_phase.set(PublishPhase::Error(err_msg));
-                                done = true;
+                        };
+
+                        // Delete existing screenshots in the set before uploading fresh ones.
+                        if let Err(e) = asc_delete_all_screenshots_in_set(&jwt, &set_id).await {
+                            push(&format!("   ⚠️  Could not clear existing screenshots: {e}"));
+                        }
+
+                        // Upload each file.
+                        for path in &files {
+                            let fname = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                            push(&format!("   ⬆  {fname}…"));
+                            match asc_upload_screenshot(&jwt, &set_id, path).await {
+                                Ok(_) => push(&format!("   ✅ {fname}")),
+                                Err(e) => {
+                                    publish_phase.set(PublishPhase::Error(format!("[{locale}] {device_name} {fname}: {e}")));
+                                    return;
+                                }
                             }
                         }
                     }
-                    if done { break; }
                 }
+
+                push("🎉 iOS screenshots uploaded to App Store Connect successfully!");
+                publish_phase.set(PublishPhase::Success);
             });
         }
     };
@@ -2062,29 +2113,20 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                         let phone_h = (phone_w as f64 * 2.16) as u32;
                         let phone_x = (width - phone_w) / 2;
                         let phone_y = height - phone_h - 150;
-                        draw_phone_frame(&mut img, phone_x, phone_y, phone_w, phone_h);
 
-                        let bezel = 30u32;
+                        // Resize the real screenshot to fit the phone area and composite it
+                        // directly — no frame, no bezel, no status bar overlay.
                         let resized_screenshot = image::imageops::resize(
                             &screenshot,
-                            phone_w - bezel * 2,
-                            phone_h - bezel * 2,
+                            phone_w,
+                            phone_h,
                             FilterType::Lanczos3,
                         );
                         image::imageops::overlay(
                             &mut img,
                             &resized_screenshot,
-                            (phone_x + bezel) as i64,
-                            (phone_y + bezel) as i64,
-                        );
-
-                        // Replace any Android status bar with a clean iOS one
-                        draw_ios_status_bar(
-                            &mut img,
-                            &font,
-                            phone_x + bezel,
-                            phone_y + bezel,
-                            phone_w - bezel * 2,
+                            phone_x as i64,
+                            phone_y as i64,
                         );
 
                         let composited_bytes = {
@@ -2404,7 +2446,25 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                                             }
                                         },
                                     }
-                                    span { "{proj.read().primary_color}" }
+                                    input {
+                                        r#type: "text",
+                                        class: "hex-input",
+                                        value: "{proj.read().primary_color}",
+                                        placeholder: "#3B82F6",
+                                        maxlength: 7,
+                                        oninput: {
+                                            let proj_dir_save = project_dir.clone();
+                                            move |e: Event<FormData>| {
+                                                let v = e.value();
+                                                let hex = if v.starts_with('#') { v.clone() } else { format!("#{v}") };
+                                                if hex.len() == 7 && hex[1..].chars().all(|c| c.is_ascii_hexdigit()) {
+                                                    let mut p = proj.write();
+                                                    p.primary_color = hex;
+                                                    save_project_state(&proj_dir_save, &p);
+                                                }
+                                            }
+                                        },
+                                    }
                                 }
                             }
                             div { class: "color-field",
@@ -2422,7 +2482,25 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                                             }
                                         },
                                     }
-                                    span { "{proj.read().secondary_color}" }
+                                    input {
+                                        r#type: "text",
+                                        class: "hex-input",
+                                        value: "{proj.read().secondary_color}",
+                                        placeholder: "#FFFFFF",
+                                        maxlength: 7,
+                                        oninput: {
+                                            let proj_dir_save = project_dir.clone();
+                                            move |e: Event<FormData>| {
+                                                let v = e.value();
+                                                let hex = if v.starts_with('#') { v.clone() } else { format!("#{v}") };
+                                                if hex.len() == 7 && hex[1..].chars().all(|c| c.is_ascii_hexdigit()) {
+                                                    let mut p = proj.write();
+                                                    p.secondary_color = hex;
+                                                    save_project_state(&proj_dir_save, &p);
+                                                }
+                                            }
+                                        },
+                                    }
                                 }
                             }
                         }
@@ -3748,82 +3826,6 @@ fn draw_centered_text(
     );
 }
 
-fn draw_phone_frame(img: &mut RgbaImage, x: u32, y: u32, w: u32, h: u32) {
-    let rect = Rect::at(x as i32, y as i32).of_size(w, h);
-    draw_filled_rect_mut(img, rect, Rgba([50, 50, 50, 255]));
-}
-
-/// Draw a clean iOS-style status bar over the top of the placed screenshot
-/// to replace any Android status bar that may be visible in the source image.
-/// `screen_x/y` is the top-left of the screen content area (inside the bezel),
-/// `screen_w` is the width of that area.
-fn draw_ios_status_bar(img: &mut RgbaImage, font: &FontRef, screen_x: u32, screen_y: u32, screen_w: u32) {
-    // Status bar height: ~4.5% of screen width (matches iOS proportions)
-    let bar_h = (screen_w as f64 * 0.075).round() as u32;
-
-    // Sample background color from the center of the status bar area in the composited image
-    // (a few px down to avoid bezel edge) and use it as the bar background.
-    let sample_y = screen_y + bar_h / 2;
-    let sample_x = screen_x + screen_w / 2;
-    let bg = if sample_x < img.width() && sample_y < img.height() {
-        *img.get_pixel(sample_x, sample_y)
-    } else {
-        Rgba([255, 255, 255, 255])
-    };
-
-    // Paint a solid bar with the sampled background color.
-    let bar_rect = Rect::at(screen_x as i32, screen_y as i32).of_size(screen_w, bar_h);
-    draw_filled_rect_mut(img, bar_rect, bg);
-
-    // Choose text/icon color based on luminance.
-    let fg = get_contrast_color(bg);
-
-    // Time text on the left: "9:41" (classic Apple status bar time)
-    let text_scale = PxScale::from(bar_h as f32 * 0.55);
-    let time_str = "9:41";
-    let padding = (screen_w as f64 * 0.04).round() as i32;
-    let text_y = screen_y as i32 + ((bar_h as i32 - (bar_h as f32 * 0.55) as i32) / 2);
-    draw_text_mut(img, fg, screen_x as i32 + padding, text_y, text_scale, font, time_str);
-
-    // Draw simple battery icon on the right
-    let icon_h = (bar_h as f64 * 0.45).round() as u32;
-    let icon_w = (icon_h as f64 * 1.8).round() as u32;
-    let icon_y = screen_y + (bar_h - icon_h) / 2;
-    let icon_x = screen_x + screen_w - (screen_w as f64 * 0.04).round() as u32 - icon_w;
-
-    // Battery outline
-    let border = (icon_h as f64 * 0.12).round().max(1.0) as u32;
-    let batt_rect = Rect::at(icon_x as i32, icon_y as i32).of_size(icon_w, icon_h);
-    draw_filled_rect_mut(img, batt_rect, fg);
-    // Battery fill (inner, slightly inset with background color)
-    let inner_rect = Rect::at(
-        (icon_x + border) as i32,
-        (icon_y + border) as i32,
-    )
-    .of_size(icon_w - border * 2, icon_h - border * 2);
-    draw_filled_rect_mut(img, inner_rect, bg);
-    // Battery charge fill (75%)
-    let charge_w = ((icon_w - border * 2) as f64 * 0.75).round() as u32;
-    let charge_rect = Rect::at(
-        (icon_x + border) as i32,
-        (icon_y + border) as i32,
-    )
-    .of_size(charge_w, icon_h - border * 2);
-    draw_filled_rect_mut(img, charge_rect, fg);
-
-    // Draw signal dots to the left of the battery
-    let dot_r = (bar_h as f64 * 0.09).round().max(2.0) as u32;
-    let dot_gap = dot_r;
-    let dots_total_w = 4 * dot_r * 2 + 3 * dot_gap;
-    let dots_x = icon_x.saturating_sub(dots_total_w + (screen_w as f64 * 0.025).round() as u32);
-    let dots_y = screen_y + bar_h / 2;
-    for i in 0u32..4 {
-        let cx = dots_x + i * (dot_r * 2 + dot_gap) + dot_r;
-        // Draw a filled square approximating a dot
-        let sq_rect = Rect::at((cx - dot_r) as i32, (dots_y - dot_r) as i32).of_size(dot_r * 2, dot_r * 2);
-        draw_filled_rect_mut(img, sq_rect, fg);
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Strip ANSI escape codes from terminal output for clean log display
@@ -4044,5 +4046,393 @@ async fn google_play_delete_edit(token: &str, package_name: &str, edit_id: &str)
         .bearer_auth(token)
         .send()
         .await;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// App Store Connect API v1 helpers
+// ---------------------------------------------------------------------------
+
+/// Mint a short-lived ES256 JWT for App Store Connect API authentication.
+/// key_id: the key ID from App Store Connect (e.g. "53U79ZJ29Y")
+/// issuer_id: the issuer UUID from App Store Connect
+/// p8_pem: contents of the downloaded .p8 private key file
+fn asc_mint_jwt(key_id: &str, issuer_id: &str, p8_pem: &str) -> Result<String, String> {
+    use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+
+    #[derive(serde::Serialize)]
+    struct AscClaims {
+        iss: String,
+        iat: u64,
+        exp: u64,
+        aud: String,
+    }
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_secs();
+
+    let claims = AscClaims {
+        iss: issuer_id.to_string(),
+        iat: now,
+        exp: now + 1200, // 20 minutes — ASC max is 20 min
+        aud: "appstoreconnect-v1".to_string(),
+    };
+
+    let mut header = Header::new(Algorithm::ES256);
+    header.kid = Some(key_id.to_string());
+
+    let key = EncodingKey::from_ec_pem(p8_pem.as_bytes())
+        .map_err(|e| format!("Invalid .p8 key: {e}"))?;
+
+    encode(&header, &claims, &key).map_err(|e| format!("JWT encode error: {e}"))
+}
+
+/// Find an app in App Store Connect by bundle ID, return its app ID.
+async fn asc_find_app(jwt: &str, bundle_id: &str) -> Result<String, String> {
+    let url = format!(
+        "https://api.appstoreconnect.apple.com/v1/apps?filter[bundleId]={bundle_id}&fields[apps]=bundleId"
+    );
+    let resp: serde_json::Value = reqwest::Client::new()
+        .get(&url)
+        .bearer_auth(jwt)
+        .send().await.map_err(|e| e.to_string())?
+        .json().await.map_err(|e| e.to_string())?;
+
+    resp["data"].as_array()
+        .and_then(|arr| arr.first())
+        .and_then(|app| app["id"].as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| format!("App with bundle ID '{bundle_id}' not found in App Store Connect"))
+}
+
+/// Find the latest iOS App Store version (any state), or create one if none exists.
+///
+/// Strategy:
+///   1. GET all versions without a platform filter (the filter can hide READY_FOR_SALE etc.)
+///   2. Prefer an editable state; fall back to any existing version.
+///   3. Only attempt POST when the list is truly empty. If POST returns
+///      "duplicate" or "invalid state" errors, do a second wider GET and use whatever comes back.
+async fn asc_find_or_create_version(jwt: &str, app_id: &str, version_string: &str) -> Result<String, String> {
+    // ── Step 1: fetch all versions (no platform filter, no field pruning) ──────
+    if let Some(id) = asc_fetch_any_version(jwt, app_id).await? {
+        return Ok(id);
+    }
+
+    // ── Step 2: truly no version found — try to create one ────────────────────
+    let version_string = if version_string.is_empty() { "1.0" } else { version_string };
+    tracing::info!("No iOS version found; creating v{version_string} via ASC API");
+    let body = serde_json::json!({
+        "data": {
+            "type": "appStoreVersions",
+            "attributes": {
+                "platform": "IOS",
+                "versionString": version_string
+            },
+            "relationships": {
+                "app": {
+                    "data": { "type": "apps", "id": app_id }
+                }
+            }
+        }
+    });
+    let http_resp = reqwest::Client::new()
+        .post("https://api.appstoreconnect.apple.com/v1/appStoreVersions")
+        .bearer_auth(jwt)
+        .json(&body)
+        .send().await.map_err(|e| e.to_string())?;
+    let create_resp: serde_json::Value = http_resp.json().await.map_err(|e| e.to_string())?;
+
+    // Happy path: POST succeeded and returned the new version.
+    if let Some(id) = create_resp["data"]["id"].as_str() {
+        return Ok(id.to_string());
+    }
+
+    // POST failed — if the error indicates the version already exists or the app
+    // is in an incompatible state, fall back to a second wider GET.
+    let error_codes: Vec<&str> = create_resp["errors"]
+        .as_array()
+        .map(|arr| arr.iter()
+            .filter_map(|e| e["code"].as_str())
+            .collect())
+        .unwrap_or_default();
+
+    let already_exists = error_codes.iter().any(|c| {
+        c.contains("DUPLICATE") || c.contains("INVALID")
+    });
+
+    if already_exists {
+        // The version exists but wasn't returned by our first GET.
+        // Try again without any query parameters.
+        tracing::warn!("POST said version exists; retrying GET with no filters");
+        if let Some(id) = asc_fetch_any_version(jwt, app_id).await? {
+            return Ok(id);
+        }
+    }
+
+    Err(format!("Failed to find or create version: {create_resp}"))
+}
+
+/// GET /v1/apps/{id}/appStoreVersions with no filters and return the ID of the
+/// best available version (editable states preferred, any state as fallback).
+async fn asc_fetch_any_version(jwt: &str, app_id: &str) -> Result<Option<String>, String> {
+    let url = format!(
+        "https://api.appstoreconnect.apple.com/v1/apps/{app_id}/appStoreVersions\
+         ?sort=-createdDate&limit=20"
+    );
+    let resp: serde_json::Value = reqwest::Client::new()
+        .get(&url)
+        .bearer_auth(jwt)
+        .send().await.map_err(|e| e.to_string())?
+        .json().await.map_err(|e| e.to_string())?;
+
+    let versions = resp["data"].as_array().map(|a| a.clone()).unwrap_or_default();
+
+    let editable_states = [
+        "PREPARE_FOR_SUBMISSION",
+        "WAITING_FOR_REVIEW",
+        "IN_REVIEW",
+        "REJECTED",
+        "DEVELOPER_REJECTED",
+        "METADATA_REJECTED",
+        "INVALID_BINARY",
+        "READY_FOR_REVIEW",
+    ];
+
+    // Prefer editable.
+    for v in versions.iter() {
+        let state = v["attributes"]["appStoreState"].as_str().unwrap_or("");
+        if editable_states.contains(&state) {
+            if let Some(id) = v["id"].as_str() {
+                return Ok(Some(id.to_string()));
+            }
+        }
+    }
+
+    // Fall back to any version.
+    Ok(versions.first().and_then(|v| v["id"].as_str()).map(|s| s.to_string()))
+}
+
+/// Return a map of locale → localization ID for a given version.
+async fn asc_get_localizations(jwt: &str, version_id: &str) -> Result<std::collections::HashMap<String, String>, String> {
+    let url = format!(
+        "https://api.appstoreconnect.apple.com/v1/appStoreVersions/{version_id}/appStoreVersionLocalizations\
+         ?fields[appStoreVersionLocalizations]=locale\
+         &limit=50"
+    );
+    let resp: serde_json::Value = reqwest::Client::new()
+        .get(&url)
+        .bearer_auth(jwt)
+        .send().await.map_err(|e| e.to_string())?
+        .json().await.map_err(|e| e.to_string())?;
+
+    let mut map = std::collections::HashMap::new();
+    if let Some(arr) = resp["data"].as_array() {
+        for item in arr {
+            if let (Some(id), Some(locale)) = (
+                item["id"].as_str(),
+                item["attributes"]["locale"].as_str(),
+            ) {
+                map.insert(locale.to_string(), id.to_string());
+            }
+        }
+    }
+    Ok(map)
+}
+
+/// PATCH an appStoreVersionLocalization to set the app name.
+/// ASC requires `name` to be non-empty for the version to pass review.
+async fn asc_set_localization_name(jwt: &str, localization_id: &str, name: &str) -> Result<(), String> {
+    let body = serde_json::json!({
+        "data": {
+            "type": "appStoreVersionLocalizations",
+            "id": localization_id,
+            "attributes": {
+                "name": name
+            }
+        }
+    });
+    let resp = reqwest::Client::new()
+        .patch(format!(
+            "https://api.appstoreconnect.apple.com/v1/appStoreVersionLocalizations/{localization_id}"
+        ))
+        .bearer_auth(jwt)
+        .json(&body)
+        .send().await.map_err(|e| e.to_string())?;
+
+    if resp.status().is_success() {
+        Ok(())
+    } else {
+        let body: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+        Err(format!("{body}"))
+    }
+}
+
+/// Get the screenshot set ID for a given localization + display type,
+/// creating the set if it doesn't exist yet.
+async fn asc_get_or_create_screenshot_set(
+    jwt: &str,
+    localization_id: &str,
+    display_type: &str,
+) -> Result<String, String> {
+    // List existing sets for this localization.
+    let list_url = format!(
+        "https://api.appstoreconnect.apple.com/v1/appStoreVersionLocalizations/{localization_id}/appScreenshotSets\
+         ?fields[appScreenshotSets]=screenshotDisplayType\
+         &limit=40"
+    );
+    let resp: serde_json::Value = reqwest::Client::new()
+        .get(&list_url)
+        .bearer_auth(jwt)
+        .send().await.map_err(|e| e.to_string())?
+        .json().await.map_err(|e| e.to_string())?;
+
+    if let Some(arr) = resp["data"].as_array() {
+        for set in arr {
+            if set["attributes"]["screenshotDisplayType"].as_str() == Some(display_type) {
+                if let Some(id) = set["id"].as_str() {
+                    return Ok(id.to_string());
+                }
+            }
+        }
+    }
+
+    // Create the set.
+    let body = serde_json::json!({
+        "data": {
+            "type": "appScreenshotSets",
+            "attributes": { "screenshotDisplayType": display_type },
+            "relationships": {
+                "appStoreVersionLocalization": {
+                    "data": { "type": "appStoreVersionLocalizations", "id": localization_id }
+                }
+            }
+        }
+    });
+    let create_resp: serde_json::Value = reqwest::Client::new()
+        .post("https://api.appstoreconnect.apple.com/v1/appScreenshotSets")
+        .bearer_auth(jwt)
+        .json(&body)
+        .send().await.map_err(|e| e.to_string())?
+        .json().await.map_err(|e| e.to_string())?;
+
+    create_resp["data"]["id"].as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| format!("Failed to create screenshot set: {create_resp}"))
+}
+
+/// Delete all screenshots currently in a screenshot set.
+async fn asc_delete_all_screenshots_in_set(jwt: &str, set_id: &str) -> Result<(), String> {
+    let list_url = format!(
+        "https://api.appstoreconnect.apple.com/v1/appScreenshotSets/{set_id}/appScreenshots\
+         ?fields[appScreenshots]=fileName\
+         &limit=50"
+    );
+    let resp: serde_json::Value = reqwest::Client::new()
+        .get(&list_url)
+        .bearer_auth(jwt)
+        .send().await.map_err(|e| e.to_string())?
+        .json().await.map_err(|e| e.to_string())?;
+
+    if let Some(arr) = resp["data"].as_array() {
+        for screenshot in arr {
+            if let Some(id) = screenshot["id"].as_str() {
+                let del_url = format!("https://api.appstoreconnect.apple.com/v1/appScreenshots/{id}");
+                let _ = reqwest::Client::new()
+                    .delete(&del_url)
+                    .bearer_auth(jwt)
+                    .send().await;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Reserve + upload a single screenshot to an appScreenshotSet.
+/// Follows the ASC two-phase upload: POST to reserve → PUT to upload bytes → PATCH to commit.
+async fn asc_upload_screenshot(jwt: &str, set_id: &str, path: &PathBuf) -> Result<(), String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("Read file: {e}"))?;
+    let file_size = bytes.len() as u64;
+    let file_name = path.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("screenshot.png")
+        .to_string();
+
+    // Phase 1: Reserve the upload.
+    let reserve_body = serde_json::json!({
+        "data": {
+            "type": "appScreenshots",
+            "attributes": {
+                "fileSize": file_size,
+                "fileName": file_name,
+            },
+            "relationships": {
+                "appScreenshotSet": {
+                    "data": { "type": "appScreenshotSets", "id": set_id }
+                }
+            }
+        }
+    });
+    let reserve_resp: serde_json::Value = reqwest::Client::new()
+        .post("https://api.appstoreconnect.apple.com/v1/appScreenshots")
+        .bearer_auth(jwt)
+        .json(&reserve_body)
+        .send().await.map_err(|e| e.to_string())?
+        .json().await.map_err(|e| e.to_string())?;
+
+    let screenshot_id = reserve_resp["data"]["id"].as_str()
+        .ok_or_else(|| format!("No screenshot ID in reserve response: {reserve_resp}"))?
+        .to_string();
+
+    // Phase 2: Upload bytes to each part URL provided by ASC.
+    let upload_ops = reserve_resp["data"]["attributes"]["uploadOperations"]
+        .as_array()
+        .ok_or_else(|| "No uploadOperations in reserve response".to_string())?;
+
+    let client = reqwest::Client::new();
+    for op in upload_ops {
+        let url = op["url"].as_str()
+            .ok_or_else(|| "Upload operation missing url".to_string())?;
+        let offset = op["offset"].as_u64().unwrap_or(0) as usize;
+        let length = op["length"].as_u64().unwrap_or(file_size) as usize;
+        let chunk = bytes.get(offset..offset + length)
+            .ok_or_else(|| format!("Chunk out of range: offset={offset} length={length} file_size={file_size}"))?
+            .to_vec();
+
+        // Build request with any required headers from the operation.
+        let mut req = client.put(url).body(chunk);
+        if let Some(headers) = op["requestHeaders"].as_array() {
+            for h in headers {
+                if let (Some(name), Some(value)) = (h["name"].as_str(), h["value"].as_str()) {
+                    req = req.header(name, value);
+                }
+            }
+        }
+        let put_resp = req.send().await.map_err(|e| format!("Upload PUT failed: {e}"))?;
+        if !put_resp.status().is_success() {
+            return Err(format!("Upload PUT returned HTTP {}", put_resp.status()));
+        }
+    }
+
+    // Phase 3: Commit — tell ASC the upload is complete.
+    let commit_body = serde_json::json!({
+        "data": {
+            "type": "appScreenshots",
+            "id": screenshot_id,
+            "attributes": { "uploaded": true }
+        }
+    });
+    let commit_url = format!("https://api.appstoreconnect.apple.com/v1/appScreenshots/{screenshot_id}");
+    let commit_resp = reqwest::Client::new()
+        .patch(&commit_url)
+        .bearer_auth(jwt)
+        .json(&commit_body)
+        .send().await.map_err(|e| format!("Commit PATCH failed: {e}"))?;
+
+    if !commit_resp.status().is_success() {
+        let body = commit_resp.text().await.unwrap_or_default();
+        return Err(format!("Commit failed: {body}"));
+    }
     Ok(())
 }

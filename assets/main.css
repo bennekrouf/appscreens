@@ -418,10 +418,21 @@ h2 {
     padding: 2px;
 }
 
-.color-picker-row span {
-    color: #9ca3af;
+.hex-input {
+    width: 80px;
+    background: #1a1d24;
+    border: 1px solid #2a2d35;
+    border-radius: 6px;
+    color: #e0e0e0;
     font-size: 0.82rem;
     font-family: 'SF Mono', Monaco, monospace;
+    padding: 4px 8px;
+    outline: none;
+    transition: border-color 0.15s;
+}
+
+.hex-input:focus {
+    border-color: #4f8ef7;
 }
 
 /* ------------------------------------------------------------------ */
