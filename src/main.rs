@@ -258,14 +258,17 @@ impl ProjectState {
         if !self.locales.contains(&"en-US".to_string()) {
             self.locales.insert(0, "en-US".to_string());
         }
-        // Migrate legacy shared source_paths → en-US locale_sources
+        // Migrate legacy shared source_paths → en-US locale_sources.
+        // IMPORTANT: drain() clears source_paths so re-opening the project never
+        // re-adds paths the user has already deleted from locale_sources.
         if !self.source_paths.is_empty() {
             let entry = self.locale_sources
                 .entry("en-US".to_string())
                 .or_insert_with(Vec::new);
-            for p in &self.source_paths {
-                if !entry.contains(p) { entry.push(p.clone()); }
+            for p in self.source_paths.drain(..) {
+                if !entry.contains(&p) { entry.push(p); }
             }
+            // source_paths is now empty — caller should persist this to disk.
         }
         // Migrate legacy shared manual_texts → en-US locale_texts
         if self.locale_texts.get("en-US").map(|v| v.is_empty()).unwrap_or(true)
@@ -309,13 +312,28 @@ fn load_project_state(project_dir: &PathBuf) -> ProjectState {
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_else(ProjectState::with_defaults);
     state.normalize_targets();
+    // Remember whether we have legacy paths to migrate.
+    let had_legacy_paths = !state.source_paths.is_empty();
     state.migrate_legacy();
+    // If legacy source_paths were migrated, persist the cleaned state immediately.
+    // This ensures source_paths is saved as [] so future loads won't re-add images
+    // that the user has already deleted from locale_sources.
+    if had_legacy_paths {
+        save_project_state(project_dir, &state);
+    }
     state
 }
 
 fn save_project_state(project_dir: &PathBuf, state: &ProjectState) {
-    if let Ok(json) = serde_json::to_string_pretty(state) {
-        let _ = std::fs::write(project_state_path(project_dir), json);
+    match serde_json::to_string_pretty(state) {
+        Ok(json) => {
+            if let Err(e) = std::fs::write(project_state_path(project_dir), &json) {
+                eprintln!("[AppScreens] ⚠️  Failed to save project state to {:?}: {e}", project_state_path(project_dir));
+            }
+        }
+        Err(e) => {
+            eprintln!("[AppScreens] ⚠️  Failed to serialize project state: {e}");
+        }
     }
 }
 
@@ -1232,8 +1250,22 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                 .pick_file()
                 .await;
             if let Some(selected) = file {
+                let src = selected.path().to_path_buf();
+                // Copy the logo into assets/ inside the project so it survives
+                // the original file being moved or deleted later.
+                let assets_dir = proj_dir.join("assets");
+                let logo_path = if let Some(fname) = src.file_name() {
+                    let dest = assets_dir.join(fname);
+                    let _ = tokio::fs::create_dir_all(&assets_dir).await;
+                    match tokio::fs::copy(&src, &dest).await {
+                        Ok(_) => dest,         // use the stable local copy
+                        Err(_) => src.clone(), // fallback: use original path
+                    }
+                } else {
+                    src.clone()
+                };
                 let mut p = proj.write();
-                p.logo_path = Some(selected.path().to_path_buf());
+                p.logo_path = Some(logo_path);
                 save_project_state(&proj_dir, &p);
             }
         });
@@ -1282,7 +1314,7 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                     Some(v) => v,
                     None => { publish_phase.set(PublishPhase::Error("Missing APP_STORE_CONNECT_API_KEY_KEY_FILEPATH in .env".into())); return; }
                 };
-                let p8_pem = match std::fs::read_to_string(&key_path) {
+                let p8_pem = match tokio::fs::read_to_string(&key_path).await {
                     Ok(s) => s,
                     Err(e) => { publish_phase.set(PublishPhase::Error(format!("Cannot read .p8 key at {key_path}: {e}"))); return; }
                 };
@@ -1481,7 +1513,7 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                 push(&format!("📦 Package: {package_name}"));
 
                 // ── 2. Read & parse service-account JSON ─────────────────────
-                let sa_json: serde_json::Value = match std::fs::read_to_string(&json_key_path)
+                let sa_json: serde_json::Value = match tokio::fs::read_to_string(&json_key_path).await
                     .map_err(|e| e.to_string())
                     .and_then(|s| serde_json::from_str(&s).map_err(|e| e.to_string()))
                 {
@@ -1643,6 +1675,7 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
             let identity = settings.read().apple_identity.clone();
             let profile = settings.read().provisioning_profile.clone();
             let short_version = settings.read().ios_short_version.clone();
+            let logo_path = proj.read().logo_path.clone();
 
             // Validate required fields
             if app_name.trim().is_empty() || project_slug.trim().is_empty() || bundle_id.trim().is_empty() {
@@ -1666,6 +1699,17 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
 
             let dir = proj_dir.clone();
             spawn(async move {
+                // 0. Sync logo → assets/icon.png so the build script always uses the latest logo.
+                if let Some(src) = &logo_path {
+                    let dest = dir.join("assets").join("icon.png");
+                    if src != &dest {
+                        match tokio::fs::copy(src, &dest).await {
+                            Ok(_)  => build_log.write().push(format!("🖼️  Logo copied to assets/icon.png")),
+                            Err(e) => build_log.write().push(format!("⚠️  Could not copy logo: {e}")),
+                        }
+                    }
+                }
+
                 // 1. Ensure scripts exist (create if missing)
                 let created = tokio::task::spawn_blocking({
                     let dir = dir.clone();
@@ -1884,7 +1928,8 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                             src.file_name().unwrap_or_default().to_string_lossy()
                         ));
 
-                        let img_bytes = match std::fs::read(src) {
+                        // Async file read — does not block the UI.
+                        let img_bytes = match tokio::fs::read(src).await {
                             Ok(b) => b,
                             Err(e) => {
                                 phase.set(AppPhase::Error(format!(
@@ -1893,6 +1938,7 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                                 return;
                             }
                         };
+                        // Decode source screenshot (fast, fine on async thread).
                         let screenshot = match image::load_from_memory(&img_bytes) {
                             Ok(img) => img.to_rgba8(),
                             Err(e) => {
@@ -1928,53 +1974,55 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                                 return;
                             }
                         };
-                        let mut frame_img = match image::load_from_memory(&frame_bytes) {
-                            Ok(img) => img.to_rgba8(),
-                            Err(e) => {
-                                phase.set(AppPhase::Error(format!(
-                                    "[{locale}] Failed to decode frame {screen_num}: {e}"
-                                )));
-                                return;
-                            }
-                        };
 
+                        // Heavy CPU work (decode AI frame, composite, encode, resize) on a
+                        // blocking thread so the async executor — and the UI — stay free.
                         phase.set(AppPhase::Resizing);
-                        let rect = find_placeholder_rect(&frame_img).unwrap_or_else(|| {
-                            fallback_placement(frame_img.width(), frame_img.height())
-                        });
                         add_log(format!("[{locale}] Compositing screenshot {screen_num}…"));
-                        composite_screenshot(&mut frame_img, &screenshot, rect);
+                        let locale2    = locale.clone();
+                        let fl_path2   = fl_path.clone();
+                        let ios_e2     = ios_e.clone();
+                        let android_e2 = android_e.clone();
+                        let cpu = tokio::task::spawn_blocking(move || -> Result<(Vec<(String, PathBuf)>, Option<String>), String> {
+                            let mut frame_img = image::load_from_memory(&frame_bytes)
+                                .map_err(|e| format!("[{locale2}] Failed to decode frame {screen_num}: {e}"))?.to_rgba8();
+                            let rect = find_placeholder_rect(&frame_img)
+                                .unwrap_or_else(|| fallback_placement(frame_img.width(), frame_img.height()));
+                            composite_screenshot(&mut frame_img, &screenshot, rect);
 
-                        let composited_bytes = {
-                            let mut buf = std::io::Cursor::new(Vec::new());
-                            if let Err(e) = frame_img.write_to(&mut buf, image::ImageFormat::Png) {
-                                phase.set(AppPhase::Error(format!(
-                                    "[{locale}] Failed to encode image {screen_num}: {e}"
-                                )));
-                                return;
-                            }
-                            buf.into_inner()
+                            let composited_bytes = {
+                                let mut buf = std::io::Cursor::new(Vec::new());
+                                frame_img.write_to(&mut buf, image::ImageFormat::Png)
+                                    .map_err(|e| format!("[{locale2}] Failed to encode image {screen_num}: {e}"))?;
+                                buf.into_inner()
+                            };
+
+                            let paths = resize_to_targets(
+                                &composited_bytes, screen_num, total, &locale2,
+                                &fl_path2, &ios_e2, &android_e2,
+                            ).map_err(|e| format!("Resize failed for [{locale2}] screen {screen_num}: {e}"))?;
+
+                            let preview = paths.iter()
+                                .find(|(l, _)| l.contains("6.7"))
+                                .map(|(_, p)| urlencoding::encode(&p.to_string_lossy().to_string()).into_owned());
+
+                            Ok((paths, preview))
+                        });
+
+                        let (paths, preview) = match cpu.await {
+                            Ok(Ok(v))  => v,
+                            Ok(Err(e)) => { phase.set(AppPhase::Error(e)); return; }
+                            Err(e)     => { phase.set(AppPhase::Error(format!("Thread panic: {e}"))); return; }
                         };
 
-                        match resize_to_targets(&composited_bytes, screen_num, total, locale, &fl_path, &ios_e, &android_e) {
-                            Ok(paths) => {
-                                for (label, _p) in &paths { add_log(format!("Saved: {label}")); }
-                                if let Some((_, p)) = paths.iter().find(|(l, _)| l.contains("6.7")) {
-                                    let encoded = urlencoding::encode(&p.to_string_lossy().to_string()).into_owned();
-                                    let mut pw = proj.write();
-                                    if !pw.generated_urls.iter().any(|u| u.contains(&p.to_string_lossy().to_string())) {
-                                        pw.generated_urls.push(format!("/localimg/{encoded}"));
-                                    }
-                                }
-                                all_outputs.extend(paths);
-                            }
-                            Err(e) => {
-                                phase.set(AppPhase::Error(format!(
-                                    "Resize failed for [{locale}] screen {screen_num}: {e}"
-                                )));
-                                return;
+                        for (label, _) in &paths { add_log(format!("Saved: {label}")); }
+                        if let Some(enc) = preview {
+                            let mut pw = proj.write();
+                            if !pw.generated_urls.iter().any(|u| u.contains(&enc)) {
+                                pw.generated_urls.push(format!("/localimg/{enc}"));
                             }
                         }
+                        all_outputs.extend(paths);
                         phase.set(AppPhase::GeneratingAi);
                     }
                 }
@@ -2038,15 +2086,12 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                     p.output_paths.clear();
                 }
 
-                let width = 1290u32;
-                let height = 2796u32;
                 let primary_rgba = parse_hex_color(&primary).unwrap_or(Rgba([59, 130, 246, 255]));
                 let secondary_rgba = if !secondary.is_empty() {
                     parse_hex_color(&secondary).unwrap_or(lighten_color(primary_rgba))
                 } else {
                     lighten_color(primary_rgba)
                 };
-                let font = FontRef::try_from_slice(ROBOTO_FONT).expect("Error constructing Font");
                 let mut all_outputs: Vec<(String, PathBuf)> = Vec::new();
 
                 // Each locale has its own images — process independently
@@ -2060,105 +2105,73 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                         let screen_num = idx + 1;
                         add_log(format!("[{locale}] Processing image {screen_num}/{total}…"));
 
-                        let bg_color = if idx % 2 == 0 {
-                            primary_rgba
-                        } else {
-                            secondary_rgba
-                        };
-                        let mut img = RgbaImage::from_pixel(width, height, bg_color);
-                        let text_color = get_contrast_color(bg_color);
-
+                        // Clone everything the blocking thread needs.
+                        let src2      = src.clone();
+                        let locale2   = locale.clone();
+                        let fl_path2  = fl_path.clone();
+                        let ios_e     = if export_ios    { ios_enabled.clone()     } else { vec![] };
+                        let android_e = if export_android { android_enabled.clone() } else { vec![] };
+                        let bg_color  = if idx % 2 == 0 { primary_rgba } else { secondary_rgba };
                         let (title, subtitle) = texts.get(idx).cloned().unwrap_or_default();
-                        if !title.is_empty() {
-                            draw_centered_text(
-                                &mut img,
-                                &font,
-                                &title,
-                                PxScale::from(120.0),
-                                text_color,
-                                200,
-                            );
-                        }
-                        if !subtitle.is_empty() {
-                            draw_centered_text(
-                                &mut img,
-                                &font,
-                                &subtitle,
-                                PxScale::from(60.0),
-                                text_color,
-                                350,
-                            );
-                        }
 
-                        let screenshot_bytes = match std::fs::read(src) {
-                            Ok(b) => b,
-                            Err(e) => {
-                                phase.set(AppPhase::Error(format!(
-                                    "Failed to read image {screen_num}: {e}"
-                                )));
-                                return;
+                        // All CPU-heavy work (read, decode, composite, encode, resize) runs on
+                        // a blocking thread so the async executor — and the UI — stay free.
+                        let cpu = tokio::task::spawn_blocking(move || -> Result<(Vec<(String, PathBuf)>, Option<String>), String> {
+                            const W: u32 = 1290;
+                            const H: u32 = 2796;
+                            let font = FontRef::try_from_slice(ROBOTO_FONT).expect("font");
+
+                            let screenshot_bytes = std::fs::read(&src2)
+                                .map_err(|e| format!("Failed to read image {screen_num}: {e}"))?;
+                            let screenshot = image::load_from_memory(&screenshot_bytes)
+                                .map_err(|e| format!("Failed to decode image {screen_num}: {e}"))?.to_rgba8();
+
+                            let mut img    = RgbaImage::from_pixel(W, H, bg_color);
+                            let text_color = get_contrast_color(bg_color);
+                            if !title.is_empty() {
+                                draw_centered_text(&mut img, &font, &title,    PxScale::from(120.0), text_color, 200);
                             }
-                        };
-                        let screenshot = match image::load_from_memory(&screenshot_bytes) {
-                            Ok(i) => i.to_rgba8(),
-                            Err(e) => {
-                                phase.set(AppPhase::Error(format!(
-                                    "Failed to decode image {screen_num}: {e}"
-                                )));
-                                return;
+                            if !subtitle.is_empty() {
+                                draw_centered_text(&mut img, &font, &subtitle, PxScale::from(60.0),  text_color, 350);
                             }
-                        };
 
-                        let phone_w = (width as f64 * 0.7) as u32;
-                        let phone_h = (phone_w as f64 * 2.16) as u32;
-                        let phone_x = (width - phone_w) / 2;
-                        let phone_y = height - phone_h - 150;
+                            let phone_w = (W as f64 * 0.7 ) as u32;
+                            let phone_h = (phone_w as f64 * 2.16) as u32;
+                            let phone_x = (W - phone_w) / 2;
+                            let phone_y = H - phone_h - 150;
+                            let resized = image::imageops::resize(&screenshot, phone_w, phone_h, FilterType::Lanczos3);
+                            image::imageops::overlay(&mut img, &resized, phone_x as i64, phone_y as i64);
 
-                        // Resize the real screenshot to fit the phone area and composite it
-                        // directly — no frame, no bezel, no status bar overlay.
-                        let resized_screenshot = image::imageops::resize(
-                            &screenshot,
-                            phone_w,
-                            phone_h,
-                            FilterType::Lanczos3,
-                        );
-                        image::imageops::overlay(
-                            &mut img,
-                            &resized_screenshot,
-                            phone_x as i64,
-                            phone_y as i64,
-                        );
+                            let composited_bytes = {
+                                let mut buf = std::io::Cursor::new(Vec::new());
+                                img.write_to(&mut buf, image::ImageFormat::Png)
+                                    .map_err(|e| format!("Failed to encode image {screen_num}: {e}"))?;
+                                buf.into_inner()
+                            };
 
-                        let composited_bytes = {
-                            let mut buf = std::io::Cursor::new(Vec::new());
-                            img.write_to(&mut buf, image::ImageFormat::Png).unwrap();
-                            buf.into_inner()
+                            let paths = resize_to_targets(
+                                &composited_bytes, screen_num, total, &locale2,
+                                &fl_path2, &ios_e, &android_e,
+                            ).map_err(|e| format!("Resize failed for [{locale2}] screen {screen_num}: {e}"))?;
+
+                            let preview = paths.iter()
+                                .find(|(l, _)| l.contains("6.7"))
+                                .map(|(_, p)| urlencoding::encode(&p.to_string_lossy().to_string()).into_owned());
+
+                            Ok((paths, preview))
+                        });
+
+                        let (paths, preview) = match cpu.await {
+                            Ok(Ok(v))  => v,
+                            Ok(Err(e)) => { phase.set(AppPhase::Error(e)); return; }
+                            Err(e)     => { phase.set(AppPhase::Error(format!("Thread panic: {e}"))); return; }
                         };
 
-                        let ios_e = if export_ios { &ios_enabled[..] } else { &[] };
-                        let android_e = if export_android { &android_enabled[..] } else { &[] };
-                        match resize_to_targets(&composited_bytes, screen_num, total, locale, &fl_path, ios_e, android_e)
-                        {
-                            Ok(paths) => {
-                                for (label, _p) in &paths {
-                                    add_log(format!("Saved: {label}"));
-                                }
-                                if let Some((_, p)) = paths.iter().find(|(l, _)| l.contains("6.7")) {
-                                    let encoded = urlencoding::encode(&p.to_string_lossy().to_string())
-                                        .into_owned();
-                                    proj.write()
-                                        .generated_urls
-                                        .push(format!("/localimg/{encoded}"));
-                                }
-                                all_outputs.extend(paths);
-                            }
-                            Err(e) => {
-                                phase.set(AppPhase::Error(format!(
-                                    "Resize failed for [{locale}] screen {screen_num}: {e}"
-                                )));
-                                return;
-                            }
+                        for (label, _) in &paths { add_log(format!("Saved: {label}")); }
+                        if let Some(enc) = preview {
+                            proj.write().generated_urls.push(format!("/localimg/{enc}"));
                         }
+                        all_outputs.extend(paths);
                     }
                 }
 
