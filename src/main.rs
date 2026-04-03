@@ -372,7 +372,7 @@ IDENTITY="{identity}"
 
 # Paths
 OUTPUT_DIR="target/ios/ipa"
-APP_BUNDLE="target/dx/{project_slug}/release/ios/{app_name}.app"
+DX_IOS_DIR="target/dx/{project_slug}/release/ios"
 ENTITLEMENTS="Entitlements.plist"
 
 echo "🚀 Starting iOS Build for App Store Distribution..."
@@ -381,6 +381,14 @@ echo "🚀 Starting iOS Build for App Store Distribution..."
 if ! command -v dx &>/dev/null; then
   echo "❌ Dioxus CLI (dx) not found. Please install it."
   exit 1
+fi
+
+# 1.5 Normalize icon to genuine PNG format
+# Apple's validator reads the actual file format, not just the extension.
+# A JPEG renamed to .png will pass the filename check but fail validation.
+if [ -f "assets/icon.png" ]; then
+  sips -s format png "assets/icon.png" --out "assets/icon.png" >/dev/null 2>&1
+  echo "✅ Icon normalized to true PNG format."
 fi
 
 # 2. Build Rust Project for iOS (Release)
@@ -392,12 +400,13 @@ echo "📦 Building Rust project for iOS (Release - Device)..."
 # Force aarch64-apple-ios to avoid simulator slices
 dx build --platform ios --release --target aarch64-apple-ios
 
-# 3. Locate Generated App Bundle
-if [ ! -d "$APP_BUNDLE" ]; then
-  echo "❌ Could not find generated .app bundle at $APP_BUNDLE"
+# 3. Locate Generated App Bundle (must be after dx build)
+APP_BUNDLE=$(find "$DX_IOS_DIR" -maxdepth 1 -name "*.app" -type d 2>/dev/null | head -1)
+if [ -z "$APP_BUNDLE" ] || [ ! -d "$APP_BUNDLE" ]; then
+  echo "❌ Could not find generated .app bundle in $DX_IOS_DIR"
+  ls "$DX_IOS_DIR" 2>/dev/null || echo "   (directory does not exist)"
   exit 1
 fi
-
 echo "✅ Found App Bundle: $APP_BUNDLE"
 
 # 4. Prepare Payload Directory
@@ -413,77 +422,97 @@ cp -R "$APP_BUNDLE" "$OUTPUT_DIR/Payload/"
 APP_PATH="$OUTPUT_DIR/Payload/$(basename "$APP_BUNDLE")"
 PLIST_PATH="$APP_PATH/Info.plist"
 
-# 4.5 Generate App Icons (Asset Catalog Method - Required for iOS 11+)
-echo "🎨 Generating App Icons via Asset Catalog..."
+# 4.5 Generate App Icons via actool → Assets.car + correct plist
+# The root cause of "Missing icon" validation failures was that actool requires
+# the output directory to exist before running, and was silently failing.
+echo "🎨 Generating App Icons..."
 ICON_SOURCE="assets/icon.png"
 
 if [ -f "$ICON_SOURCE" ]; then
   echo "   Found source icon: $ICON_SOURCE"
 
-  # Create temporary Asset Catalog structure
-  ASSETS_DIR="TargetSupport/Assets.xcassets"
-  APP_ICON_SET="$ASSETS_DIR/AppIcon.appiconset"
-  mkdir -p "$APP_ICON_SET"
+  # Convert to true PNG and strip alpha (Apple rejects transparency and JPEG-as-PNG)
+  FLAT_ICON="/tmp/icon_flat_$$.png"
+  sips -s format png "$ICON_SOURCE" --out "$FLAT_ICON" >/dev/null 2>&1
+  echo "   Converted to true PNG."
 
-  # Write Contents.json
-  cat >"$APP_ICON_SET/Contents.json" <<EOF
+  # Build asset catalog in temp dir
+  CATALOG_DIR="/tmp/appscreens_icons_$$"
+  ICON_SET="$CATALOG_DIR/Assets.xcassets/AppIcon.appiconset"
+  mkdir -p "$ICON_SET"
+
+  # iPhone sizes
+  sips -z 40   40   "$FLAT_ICON" --out "$ICON_SET/Icon-20@2x.png"      >/dev/null
+  sips -z 60   60   "$FLAT_ICON" --out "$ICON_SET/Icon-20@3x.png"      >/dev/null
+  sips -z 58   58   "$FLAT_ICON" --out "$ICON_SET/Icon-29@2x.png"      >/dev/null
+  sips -z 87   87   "$FLAT_ICON" --out "$ICON_SET/Icon-29@3x.png"      >/dev/null
+  sips -z 80   80   "$FLAT_ICON" --out "$ICON_SET/Icon-40@2x.png"      >/dev/null
+  sips -z 120  120  "$FLAT_ICON" --out "$ICON_SET/Icon-40@3x.png"      >/dev/null
+  sips -z 120  120  "$FLAT_ICON" --out "$ICON_SET/Icon-60@2x.png"      >/dev/null
+  sips -z 180  180  "$FLAT_ICON" --out "$ICON_SET/Icon-60@3x.png"      >/dev/null
+  # iPad sizes
+  sips -z 20   20   "$FLAT_ICON" --out "$ICON_SET/Icon-ipad-20@1x.png" >/dev/null
+  sips -z 40   40   "$FLAT_ICON" --out "$ICON_SET/Icon-ipad-20@2x.png" >/dev/null
+  sips -z 29   29   "$FLAT_ICON" --out "$ICON_SET/Icon-ipad-29@1x.png" >/dev/null
+  sips -z 58   58   "$FLAT_ICON" --out "$ICON_SET/Icon-ipad-29@2x.png" >/dev/null
+  sips -z 40   40   "$FLAT_ICON" --out "$ICON_SET/Icon-ipad-40@1x.png" >/dev/null
+  sips -z 80   80   "$FLAT_ICON" --out "$ICON_SET/Icon-ipad-40@2x.png" >/dev/null
+  sips -z 76   76   "$FLAT_ICON" --out "$ICON_SET/Icon-ipad-76@1x.png" >/dev/null
+  sips -z 152  152  "$FLAT_ICON" --out "$ICON_SET/Icon-ipad-76@2x.png" >/dev/null
+  sips -z 167  167  "$FLAT_ICON" --out "$ICON_SET/Icon-ipad-83@2x.png" >/dev/null
+  # App Store
+  sips -z 1024 1024 "$FLAT_ICON" --out "$ICON_SET/Icon-1024.png"       >/dev/null
+  rm -f "$FLAT_ICON"
+
+  cat > "$ICON_SET/Contents.json" << 'ICONEOF'
 {{
-  "images" : [
-    {{ "size" : "20x20", "idiom" : "iphone", "filename" : "Icon-20@2x.png", "scale" : "2x" }},
-    {{ "size" : "20x20", "idiom" : "iphone", "filename" : "Icon-20@3x.png", "scale" : "3x" }},
-    {{ "size" : "29x29", "idiom" : "iphone", "filename" : "Icon-29@2x.png", "scale" : "2x" }},
-    {{ "size" : "29x29", "idiom" : "iphone", "filename" : "Icon-29@3x.png", "scale" : "3x" }},
-    {{ "size" : "40x40", "idiom" : "iphone", "filename" : "Icon-40@2x.png", "scale" : "2x" }},
-    {{ "size" : "40x40", "idiom" : "iphone", "filename" : "Icon-40@3x.png", "scale" : "3x" }},
-    {{ "size" : "60x60", "idiom" : "iphone", "filename" : "Icon-60@2x.png", "scale" : "2x" }},
-    {{ "size" : "60x60", "idiom" : "iphone", "filename" : "Icon-60@3x.png", "scale" : "3x" }},
-    {{ "size" : "20x20", "idiom" : "ipad", "filename" : "Icon-20.png", "scale" : "1x" }},
-    {{ "size" : "20x20", "idiom" : "ipad", "filename" : "Icon-20@2x.png", "scale" : "2x" }},
-    {{ "size" : "29x29", "idiom" : "ipad", "filename" : "Icon-29.png", "scale" : "1x" }},
-    {{ "size" : "29x29", "idiom" : "ipad", "filename" : "Icon-29@2x.png", "scale" : "2x" }},
-    {{ "size" : "40x40", "idiom" : "ipad", "filename" : "Icon-40.png", "scale" : "1x" }},
-    {{ "size" : "40x40", "idiom" : "ipad", "filename" : "Icon-40@2x.png", "scale" : "2x" }},
-    {{ "size" : "76x76", "idiom" : "ipad", "filename" : "Icon-76.png", "scale" : "1x" }},
-    {{ "size" : "76x76", "idiom" : "ipad", "filename" : "Icon-76@2x.png", "scale" : "2x" }},
-    {{ "size" : "83.5x83.5", "idiom" : "ipad", "filename" : "Icon-83.5@2x.png", "scale" : "2x" }},
-    {{ "size" : "1024x1024", "idiom" : "ios-marketing", "filename" : "Icon-1024.png", "scale" : "1x" }}
+  "images": [
+    {{"idiom":"iphone","scale":"2x","size":"20x20","filename":"Icon-20@2x.png"}},
+    {{"idiom":"iphone","scale":"3x","size":"20x20","filename":"Icon-20@3x.png"}},
+    {{"idiom":"iphone","scale":"2x","size":"29x29","filename":"Icon-29@2x.png"}},
+    {{"idiom":"iphone","scale":"3x","size":"29x29","filename":"Icon-29@3x.png"}},
+    {{"idiom":"iphone","scale":"2x","size":"40x40","filename":"Icon-40@2x.png"}},
+    {{"idiom":"iphone","scale":"3x","size":"40x40","filename":"Icon-40@3x.png"}},
+    {{"idiom":"iphone","scale":"2x","size":"60x60","filename":"Icon-60@2x.png"}},
+    {{"idiom":"iphone","scale":"3x","size":"60x60","filename":"Icon-60@3x.png"}},
+    {{"idiom":"ipad","scale":"1x","size":"20x20","filename":"Icon-ipad-20@1x.png"}},
+    {{"idiom":"ipad","scale":"2x","size":"20x20","filename":"Icon-ipad-20@2x.png"}},
+    {{"idiom":"ipad","scale":"1x","size":"29x29","filename":"Icon-ipad-29@1x.png"}},
+    {{"idiom":"ipad","scale":"2x","size":"29x29","filename":"Icon-ipad-29@2x.png"}},
+    {{"idiom":"ipad","scale":"1x","size":"40x40","filename":"Icon-ipad-40@1x.png"}},
+    {{"idiom":"ipad","scale":"2x","size":"40x40","filename":"Icon-ipad-40@2x.png"}},
+    {{"idiom":"ipad","scale":"1x","size":"76x76","filename":"Icon-ipad-76@1x.png"}},
+    {{"idiom":"ipad","scale":"2x","size":"76x76","filename":"Icon-ipad-76@2x.png"}},
+    {{"idiom":"ipad","scale":"2x","size":"83.5x83.5","filename":"Icon-ipad-83@2x.png"}},
+    {{"idiom":"ios-marketing","scale":"1x","size":"1024x1024","filename":"Icon-1024.png"}}
   ],
-  "info" : {{ "version" : 1, "author" : "xcode" }}
+  "info": {{"author":"xcode","version":1}}
 }}
-EOF
+ICONEOF
 
-  # Generate Icons
-  sips -z 40 40 "$ICON_SOURCE" --out "$APP_ICON_SET/Icon-20@2x.png" >/dev/null
-  sips -z 60 60 "$ICON_SOURCE" --out "$APP_ICON_SET/Icon-20@3x.png" >/dev/null
-  sips -z 58 58 "$ICON_SOURCE" --out "$APP_ICON_SET/Icon-29@2x.png" >/dev/null
-  sips -z 87 87 "$ICON_SOURCE" --out "$APP_ICON_SET/Icon-29@3x.png" >/dev/null
-  sips -z 80 80 "$ICON_SOURCE" --out "$APP_ICON_SET/Icon-40@2x.png" >/dev/null
-  sips -z 120 120 "$ICON_SOURCE" --out "$APP_ICON_SET/Icon-40@3x.png" >/dev/null
-  sips -z 120 120 "$ICON_SOURCE" --out "$APP_ICON_SET/Icon-60@2x.png" >/dev/null
-  sips -z 180 180 "$ICON_SOURCE" --out "$APP_ICON_SET/Icon-60@3x.png" >/dev/null
-  sips -z 20 20 "$ICON_SOURCE" --out "$APP_ICON_SET/Icon-20.png" >/dev/null
-  sips -z 29 29 "$ICON_SOURCE" --out "$APP_ICON_SET/Icon-29.png" >/dev/null
-  sips -z 40 40 "$ICON_SOURCE" --out "$APP_ICON_SET/Icon-40.png" >/dev/null
-  sips -z 76 76 "$ICON_SOURCE" --out "$APP_ICON_SET/Icon-76.png" >/dev/null
-  sips -z 152 152 "$ICON_SOURCE" --out "$APP_ICON_SET/Icon-76@2x.png" >/dev/null
-  sips -z 167 167 "$ICON_SOURCE" --out "$APP_ICON_SET/Icon-83.5@2x.png" >/dev/null
-  sips -z 1024 1024 "$ICON_SOURCE" --out "$APP_ICON_SET/Icon-1024.png" >/dev/null
+  # APP_PATH already exists (bundle was copied there). actool writes Assets.car into it.
+  PARTIAL_PLIST="/tmp/partial_info_$$.plist"
+  echo "   Compiling asset catalog with actool..."
+  xcrun actool "$CATALOG_DIR/Assets.xcassets" \
+    --compile "$APP_PATH" \
+    --platform iphoneos \
+    --minimum-deployment-target 14.0 \
+    --app-icon AppIcon \
+    --output-partial-info-plist "$PARTIAL_PLIST" 2>&1 | grep -v "^$" || true
 
-  # Compile Asset Catalog
-  echo "   Compiling Assets.car..."
-  xcrun actool "$ASSETS_DIR" --compile "$APP_PATH" --platform iphoneos --minimum-deployment-target 13.0 --app-icon AppIcon --output-partial-info-plist "partial_info.plist" >/dev/null
-
-  # Merge Partial Info.plist
-  if [ -f "partial_info.plist" ]; then
-    echo "   Merging partial Info.plist..."
-    /usr/libexec/PlistBuddy -c "Merge partial_info.plist" "$PLIST_PATH"
-    rm "partial_info.plist"
+  if [ -f "$PARTIAL_PLIST" ]; then
+    # Remove existing icon keys then merge actool-generated ones
+    /usr/libexec/PlistBuddy -c "Delete :CFBundleIcons" "$PLIST_PATH" 2>/dev/null || true
+    /usr/libexec/PlistBuddy -c "Delete :CFBundleIcons~ipad" "$PLIST_PATH" 2>/dev/null || true
+    /usr/libexec/PlistBuddy -c "Delete :CFBundleIconName" "$PLIST_PATH" 2>/dev/null || true
+    /usr/libexec/PlistBuddy -c "Merge $PARTIAL_PLIST" "$PLIST_PATH"
+    rm -f "$PARTIAL_PLIST"
+    echo "✅ Assets.car generated and Info.plist updated."
+  else
+    echo "⚠️  actool did not produce a partial plist."
   fi
 
-  # Cleanup
-  rm -rf "TargetSupport"
-
-  echo "✅ Assets compiled and Info.plist updated"
+  rm -rf "$CATALOG_DIR"
 else
   echo "⚠️  Warning: assets/icon.png not found. Skipping icon generation."
 fi
@@ -553,11 +582,20 @@ plutil -replace DTXcodeBuild -string "$XCODE_BUILD" "$PLIST_PATH"
 plutil -replace DTCompiler -string "com.apple.compilers.llvm.clang.1_0" "$PLIST_PATH"
 
 # 6. Embed Provisioning Profile
-DOWNLOADS_PROFILE="{profile_path}"
+# Priority order:
+#   1. ~/Downloads/<AppName>.mobileprovision  (project-specific, freshly downloaded)
+#   2. AppScreens global profile selection
+#   3. embedded.mobileprovision in project root
+#   4. Any .mobileprovision in project root
+GLOBAL_PROFILE="{profile_path}"
+NAMED_PROFILE=$(ls "$HOME/Downloads/{app_name}.mobileprovision" 2>/dev/null | head -1)
 
-if [ -f "$DOWNLOADS_PROFILE" ]; then
-  echo "📄 Found profile: $DOWNLOADS_PROFILE"
-  cp "$DOWNLOADS_PROFILE" "$APP_PATH/embedded.mobileprovision"
+if [ -f "$NAMED_PROFILE" ]; then
+  echo "📄 Using project profile from Downloads: $NAMED_PROFILE"
+  cp "$NAMED_PROFILE" "$APP_PATH/embedded.mobileprovision"
+elif [ -f "$GLOBAL_PROFILE" ]; then
+  echo "📄 Using global profile: $GLOBAL_PROFILE"
+  cp "$GLOBAL_PROFILE" "$APP_PATH/embedded.mobileprovision"
 elif [ -f "embedded.mobileprovision" ]; then
   echo "📄 Found embedded.mobileprovision in root"
   cp "embedded.mobileprovision" "$APP_PATH/embedded.mobileprovision"
@@ -624,10 +662,17 @@ open -R "./$APP_NAME.ipa"
 
 fn script_android_release(app_name: &str, project_slug: &str, bundle_id: &str) -> String {
     // Generate right keystore config based on project_slug
-    let is_abjad = project_slug.to_lowercase() == "abjad";
-    let keystore_file = if is_abjad { "reset_upload_key.jks" } else { "tafseel-quran-release.keystore" };
-    let key_alias_val = if is_abjad { "upload" } else { "tafseel-quran" };
-    let key_pass_val = if is_abjad { "android" } else { "TafseelQuran2024!Secure" };
+    let slug_lower = project_slug.to_lowercase();
+    let is_abjad = slug_lower == "abjad";
+    // abjad has its own legacy keystore; all other apps share mayorana-release.keystore.
+    let keystore_path = if is_abjad {
+        "$HOME/code/temp_antigravity_abjad/keystores/reset_upload_key.jks"
+    } else {
+        "$HOME/code/dioxus/keystores/mayorana-release.keystore"
+    };
+    let key_alias_val = if is_abjad { "upload".to_string() } else { slug_lower.clone() };
+    // Password for mayorana-release.keystore; abjad uses its own keystore with "android".
+    let key_pass_snippet = if is_abjad { r#"KEY_PASS="android""# } else { r#"KEY_PASS="Salma2026!""# };
 
     // Special case for Android package name to bypass Play Console lock
     let android_package = if bundle_id == "com.mayorana.tafseel.abjad" {
@@ -651,9 +696,9 @@ fn script_android_release(app_name: &str, project_slug: &str, bundle_id: &str) -
 set -e
 
 PROJECT_NAME="{project_slug}"
-KEYSTORE_PATH="../keystores/{keystore_file}"
+KEYSTORE_PATH="{keystore_path}"
 KEY_ALIAS="{key_alias_val}"
-KEY_PASS="{key_pass_val}"
+{key_pass_snippet}
 
 export ANDROID_HOME="$HOME/Library/Android/sdk"
 export ANDROID_NDK_HOME="$ANDROID_HOME/ndk"
@@ -663,10 +708,11 @@ export ANDROID_NDK_HOME="$ANDROID_NDK_HOME/$NDK_VERSION"
 echo "🚀 Starting Android Release Build (AAB)..."
 echo "NDK: $NDK_VERSION"
 
-# 0. Check for Keystore
+# 0. Check keystore
 if [ ! -f "$KEYSTORE_PATH" ]; then
-    echo "❌ Error: $KEYSTORE_PATH not found!"
-    echo "   Please generate it first or place it in the root directory."
+    echo "❌ Keystore not found: $KEYSTORE_PATH"
+    echo "   Create it with:"
+    echo "   keytool -genkey -v -keystore \$KEYSTORE_PATH -alias $KEY_ALIAS -keyalg RSA -keysize 2048 -validity 10000"
     exit 1
 fi
 
@@ -710,7 +756,7 @@ fi
 echo "✍️  Injecting Signing Configuration..."
 
 if ! grep -q "signingConfigs" "$BUILD_GRADLE"; then
-    ABS_KEYSTORE_PATH="$(pwd)/$KEYSTORE_PATH"
+    ABS_KEYSTORE_PATH="$KEYSTORE_PATH"
 
     if [[ "$(cat "$BUILD_GRADLE")" == *"buildTypes"* ]]; then
         echo "   Patching existing buildTypes..."
@@ -914,8 +960,8 @@ fi
 "##)
 }
 
-/// Write scripts to `project_dir` only if they don't already exist.
-/// Returns a list of scripts that were newly created.
+/// Always (re)write build scripts from the latest template.
+/// This ensures config changes and template fixes are always picked up.
 fn ensure_build_scripts(
     project_dir: &PathBuf,
     app_name: &str,
@@ -947,16 +993,14 @@ fn ensure_build_scripts(
     let mut created = Vec::new();
     for (name, content) in scripts {
         let path = project_dir.join(name);
-        if !path.exists() {
-            if std::fs::write(&path, content).is_ok() {
-                // Make executable
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755));
-                }
-                created.push((*name).to_string());
+        if std::fs::write(&path, content).is_ok() {
+            // Make executable
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755));
             }
+            created.push((*name).to_string());
         }
     }
     created
@@ -1700,13 +1744,25 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
             let dir = proj_dir.clone();
             spawn(async move {
                 // 0. Sync logo → assets/icon.png so the build script always uses the latest logo.
+                // Always re-encode as genuine PNG — the source may be a JPEG renamed to .png,
+                // which Apple's validator rejects even though the extension looks right.
                 if let Some(src) = &logo_path {
                     let dest = dir.join("assets").join("icon.png");
-                    if src != &dest {
-                        match tokio::fs::copy(src, &dest).await {
-                            Ok(_)  => build_log.write().push(format!("🖼️  Logo copied to assets/icon.png")),
-                            Err(e) => build_log.write().push(format!("⚠️  Could not copy logo: {e}")),
-                        }
+                    let src2 = src.clone();
+                    let dest2 = dest.clone();
+                    match tokio::task::spawn_blocking(move || {
+                        image::open(&src2)
+                            .map_err(|e| e.to_string())
+                            .and_then(|img| {
+                                // Convert to RGB (drop alpha) and save as real PNG
+                                img.to_rgb8()
+                                   .save_with_format(&dest2, image::ImageFormat::Png)
+                                   .map_err(|e| e.to_string())
+                            })
+                    }).await {
+                        Ok(Ok(_))  => build_log.write().push("🖼️  Logo saved as true PNG to assets/icon.png".into()),
+                        Ok(Err(e)) => build_log.write().push(format!("⚠️  Could not encode logo as PNG: {e}")),
+                        Err(e)     => build_log.write().push(format!("⚠️  Logo task failed: {e}")),
                     }
                 }
 
