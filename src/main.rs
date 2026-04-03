@@ -787,8 +787,9 @@ cd "$BUILD_DIR"
 ./gradlew bundleRelease
 
 # 6. Verify and Move
-OUTPUT_AAB="app/build/outputs/bundle/release/app-release.aab"
-if [ -f "$OUTPUT_AAB" ]; then
+# Find the AAB dynamically — Gradle may name it after the project, not "app-release.aab"
+OUTPUT_AAB=$(find "app/build/outputs/bundle/release" -name "*.aab" 2>/dev/null | head -1)
+if [ -n "$OUTPUT_AAB" ] && [ -f "$OUTPUT_AAB" ]; then
     echo "✅ AAB Generated: $OUTPUT_AAB"
     cd - > /dev/null
     TARGET_NAME="${{PROJECT_NAME}}_release.aab"
@@ -800,12 +801,14 @@ if [ -f "$OUTPUT_AAB" ]; then
         echo "✅ Signature Verified!"
         echo "🎉 Ready for Google Play Console upload."
         open -R "./$TARGET_NAME"
+        open "$(pwd)"
     else
         echo "❌ Signature Verification FAILED."
         exit 1
     fi
 else
-    echo "❌ Build Failed: AAB not found."
+    echo "❌ Build Failed: AAB not found in app/build/outputs/bundle/release/"
+    ls "$BUILD_DIR/app/build/outputs/bundle/release/" 2>/dev/null || echo "(directory does not exist)"
     exit 1
 fi
 "##)
@@ -952,10 +955,21 @@ if [[ -f "$GENERATED_APK" ]]; then
     touch "$SIGNED_APK"
 fi
 
-APK_PATH="$(find target/dx -name "*.apk" -type f -exec ls -t {{}} + 2>/dev/null | head -1)"
-if [[ -n "$APK_PATH" ]]; then
-    echo "📂 Opening APK folder..."
-    open "$(dirname "$APK_PATH")"
+if [[ -f "$SIGNED_APK" ]]; then
+    TARGET_APK="./{project_slug}-debug.apk"
+    cp "$SIGNED_APK" "$TARGET_APK"
+    echo "📦 APK copied to: $TARGET_APK"
+    open -R "$TARGET_APK"
+    open "$(pwd)"
+else
+    APK_PATH="$(find target/dx -name "*.apk" -type f -exec ls -t {{}} + 2>/dev/null | head -1)"
+    if [[ -n "$APK_PATH" ]]; then
+        TARGET_APK="./{project_slug}-debug.apk"
+        cp "$APK_PATH" "$TARGET_APK"
+        echo "📦 APK copied to: $TARGET_APK"
+        open -R "$TARGET_APK"
+        open "$(pwd)"
+    fi
 fi
 "##)
 }
@@ -3201,27 +3215,13 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                                             disabled: matches!(*build_phase.read(), BuildPhase::Running(_)),
                                             onclick: {
                                                 let mut on_run = on_run_script.clone();
-                                                move |_| on_run("build_android.sh".into())
-                                            },
-                                            if matches!(*build_phase.read(), BuildPhase::Running(ref n) if n == "build_android.sh") {
-                                                span { class: "spinner spinner-dark" }
-                                                " Building…"
-                                            } else {
-                                                "🔧 Build APK (Release)"
-                                            }
-                                        }
-                                        button {
-                                            class: "btn btn-build btn-build-android-secondary",
-                                            disabled: matches!(*build_phase.read(), BuildPhase::Running(_)),
-                                            onclick: {
-                                                let mut on_run = on_run_script.clone();
                                                 move |_| on_run("build_apk.sh".into())
                                             },
                                             if matches!(*build_phase.read(), BuildPhase::Running(ref n) if n == "build_apk.sh") {
                                                 span { class: "spinner spinner-dark" }
                                                 " Building…"
                                             } else {
-                                                "🐛 Build APK (Debug/Test)"
+                                                "🐛 Build APK (Test Device)"
                                             }
                                         }
                                     }
