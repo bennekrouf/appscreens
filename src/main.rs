@@ -731,6 +731,9 @@ SOURCE_ICONS="manual_assets/android_icons"
 if [ -d "$RES_DIR" ] && [ -d "$SOURCE_ICONS" ]; then
     find "$RES_DIR" -name "ic_launcher.webp" -delete
     find "$RES_DIR" -name "ic_launcher_round.webp" -delete
+    # Remove adaptive icon XMLs — they override PNGs on Android 8+ and show the default robot icon
+    rm -f "$RES_DIR/mipmap-anydpi-v26/ic_launcher.xml"
+    rm -f "$RES_DIR/mipmap-anydpi-v26/ic_launcher_round.xml"
     cp -r "$SOURCE_ICONS/mipmap-"* "$RES_DIR/"
     echo "✅ Icons updated."
 else
@@ -903,6 +906,9 @@ echo "🔧 Copying custom icons..."
 RES_DIR="target/dx/$PROJECT_NAME/release/android/app/app/src/main/res"
 find "$RES_DIR" -name "ic_launcher.webp" -delete
 find "$RES_DIR" -name "ic_launcher_round.webp" -delete
+# Remove adaptive icon XMLs — they override PNGs on Android 8+ and show the default robot icon
+rm -f "$RES_DIR/mipmap-anydpi-v26/ic_launcher.xml"
+rm -f "$RES_DIR/mipmap-anydpi-v26/ic_launcher_round.xml"
 cp -r manual_assets/android_icons/mipmap-* "$RES_DIR/"
 echo "✅ Icons copied successfully."
 
