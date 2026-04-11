@@ -15,17 +15,17 @@ body {
 .picker-screen {
     min-height: 100vh;
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: center;
-    padding: 40px 20px;
+    padding: 60px 20px 60px;
 }
 
 .picker-inner {
     width: 100%;
-    max-width: 520px;
+    max-width: 600px;
     display: flex;
     flex-direction: column;
-    gap: 28px;
+    gap: 20px;
 }
 
 .picker-logo h1 {
@@ -40,11 +40,112 @@ body {
     margin: 0;
 }
 
+.picker-actions {
+    display: flex;
+    gap: 10px;
+}
+
 .picker-new-btn {
-    width: 100%;
+    flex: 1;
     padding: 14px 20px;
     font-size: 1rem;
     border-radius: 10px;
+}
+
+.picker-open-btn {
+    flex: 1;
+    padding: 14px 20px;
+    font-size: 1rem;
+    border-radius: 10px;
+    background: #1a1d24;
+    border: 1px solid #2a2d35;
+    color: #e0e0e0;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.picker-open-btn:hover {
+    background: #212430;
+    border-color: #3b82f6;
+}
+
+/* ---- New Project wizard panel ---- */
+.new-project-panel {
+    background: #141720;
+    border: 1px solid #2a2d35;
+    border-radius: 12px;
+    padding: 22px 22px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.new-project-title {
+    color: #fff;
+    font-size: 1rem;
+    margin: 0 0 4px 0;
+    font-weight: 600;
+}
+
+.new-project-error {
+    color: #f87171;
+    font-size: 0.85rem;
+    margin: 0;
+    background: rgba(239,68,68,0.1);
+    border: 1px solid rgba(239,68,68,0.3);
+    border-radius: 6px;
+    padding: 8px 12px;
+}
+
+/* Platform selector buttons */
+.platform-selector {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.platform-btn {
+    padding: 7px 14px;
+    border-radius: 8px;
+    border: 1px solid #2a2d35;
+    background: #1a1d24;
+    color: #bbb;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.platform-btn:hover {
+    background: #212430;
+    border-color: #3b82f6;
+    color: #e0e0e0;
+}
+
+.platform-btn-active {
+    background: #1d3461;
+    border-color: #3b82f6;
+    color: #fff;
+    font-weight: 600;
+}
+
+/* Folder pick row */
+.folder-pick-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.folder-pick-path {
+    font-family: 'SF Mono', Monaco, monospace;
+    font-size: 0.78rem;
+    color: #6ee7b7;
+    word-break: break-all;
+}
+
+.folder-pick-hint {
+    color: #555;
+    font-size: 0.85rem;
 }
 
 .picker-recents {

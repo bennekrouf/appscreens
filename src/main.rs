@@ -42,6 +42,13 @@ const ANDROID_TARGETS: &[(&str, &str, u32, u32)] = &[
     ("android_feature", "Android Feature", 1024, 500),
 ];
 
+// Desktop screenshot targets (used when platform_type == Desktop)
+const DESKTOP_TARGETS: &[(&str, &str, u32, u32)] = &[
+    ("desktop_mac",   "macOS (1280×800)",    1280,  800),
+    ("desktop_win",   "Windows (1280×720)",  1280,  720),
+    ("desktop_wide",  "Widescreen (1920×1080)", 1920, 1080),
+];
+
 // ---------------------------------------------------------------------------
 // Global settings (gear popup)
 // ---------------------------------------------------------------------------
@@ -164,6 +171,39 @@ fn load_env(dotenv_paths: &[PathBuf]) -> std::collections::HashMap<String, Strin
 }
 
 // ---------------------------------------------------------------------------
+// Platform type
+// ---------------------------------------------------------------------------
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+enum PlatformType {
+    Desktop,
+    Ios,
+    Android,
+    #[default]
+    IosAndroid,
+}
+
+impl PlatformType {
+    fn label(&self) -> &'static str {
+        match self {
+            PlatformType::Desktop     => "Desktop",
+            PlatformType::Ios         => "iOS",
+            PlatformType::Android     => "Android",
+            PlatformType::IosAndroid  => "iOS + Android",
+        }
+    }
+    fn has_ios(&self) -> bool {
+        matches!(self, PlatformType::Ios | PlatformType::IosAndroid)
+    }
+    fn has_android(&self) -> bool {
+        matches!(self, PlatformType::Android | PlatformType::IosAndroid)
+    }
+    fn has_desktop(&self) -> bool {
+        matches!(self, PlatformType::Desktop)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Per-project state (saved as <project_dir>/appscreens.json)
 // ---------------------------------------------------------------------------
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
@@ -207,6 +247,8 @@ struct ProjectState {
     project_slug: String,  // Lowercase dx slug, e.g. "abjad"
     #[serde(default)]
     bundle_id: String,     // iOS + Android bundle ID, e.g. "com.mayorana.tafseel.abjad"
+    #[serde(default)]
+    platform_type: PlatformType,  // Target platform(s) for this project
     // Export configuration
     #[serde(default = "default_true")]
     export_ios: bool,
@@ -218,6 +260,9 @@ struct ProjectState {
     /// One bool per ANDROID_TARGETS entry (all enabled by default)
     #[serde(default = "default_android_targets")]
     android_targets: Vec<bool>,
+    /// One bool per DESKTOP_TARGETS entry (all enabled by default)
+    #[serde(default = "default_desktop_targets")]
+    desktop_targets: Vec<bool>,
 }
 
 fn default_true() -> bool { true }
@@ -225,6 +270,7 @@ fn default_locale() -> String { "en-US".to_string() }
 fn default_locales() -> Vec<String> { vec!["en-US".to_string()] }
 fn default_ios_targets() -> Vec<bool> { vec![true; IOS_TARGETS.len()] }
 fn default_android_targets() -> Vec<bool> { vec![true; ANDROID_TARGETS.len()] }
+fn default_desktop_targets() -> Vec<bool> { vec![true; DESKTOP_TARGETS.len()] }
 
 impl ProjectState {
     fn with_defaults() -> Self {
@@ -237,16 +283,19 @@ impl ProjectState {
             export_android: true,
             ios_targets: default_ios_targets(),
             android_targets: default_android_targets(),
+            desktop_targets: default_desktop_targets(),
             ..Default::default()
         }
     }
-    /// Ensure ios_targets / android_targets vecs are the right length.
+    /// Ensure ios_targets / android_targets / desktop_targets vecs are the right length.
     /// Also migrate legacy `manual_texts` + `locale` into `locale_texts` / `locales`.
     fn normalize_targets(&mut self) {
         while self.ios_targets.len() < IOS_TARGETS.len() { self.ios_targets.push(true); }
         self.ios_targets.truncate(IOS_TARGETS.len());
         while self.android_targets.len() < ANDROID_TARGETS.len() { self.android_targets.push(true); }
         self.android_targets.truncate(ANDROID_TARGETS.len());
+        while self.desktop_targets.len() < DESKTOP_TARGETS.len() { self.desktop_targets.push(true); }
+        self.desktop_targets.truncate(DESKTOP_TARGETS.len());
     }
     /// Migrate old shared data into the per-locale maps.
     fn migrate_legacy(&mut self) {
@@ -1027,6 +1076,91 @@ fn ensure_build_scripts(
 }
 
 // ---------------------------------------------------------------------------
+// Scaffold a brand-new Dioxus project from AppScreens (no pre-run scaffolder needed)
+// ---------------------------------------------------------------------------
+
+/// Create the minimal Rust/Dioxus project structure for a new app.
+/// Returns Ok(()) or an Err with a description.
+fn scaffold_new_project(
+    dir: &PathBuf,
+    name: &str,
+    slug: &str,
+    bundle_id: &str,
+    platform: &PlatformType,
+) -> Result<(), String> {
+    let src_dir = dir.join("src");
+    let assets_dir = dir.join("assets");
+
+    std::fs::create_dir_all(&src_dir).map_err(|e| format!("Cannot create src/: {e}"))?;
+    std::fs::create_dir_all(&assets_dir).map_err(|e| format!("Cannot create assets/: {e}"))?;
+
+    // ── Cargo.toml ────────────────────────────────────────────────────────────
+    let features = match platform {
+        PlatformType::Desktop    => r#"["desktop"]"#,
+        PlatformType::Ios        => r#"["mobile"]"#,
+        PlatformType::Android    => r#"["mobile"]"#,
+        PlatformType::IosAndroid => r#"["mobile", "router"]"#,
+    };
+    let cargo_toml = format!(
+        "[package]\nname = \"{slug}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+         [dependencies]\ndioxus = {{ version = \"0.6\", features = {features} }}\n"
+    );
+    std::fs::write(dir.join("Cargo.toml"), &cargo_toml)
+        .map_err(|e| format!("Cannot write Cargo.toml: {e}"))?;
+
+    // ── Dioxus.toml ───────────────────────────────────────────────────────────
+    let default_platform = match platform {
+        PlatformType::Desktop => "desktop",
+        _                     => "mobile",
+    };
+    let dioxus_toml = format!(
+        "[application]\nname = \"{slug}\"\ndefault_platform = \"{default_platform}\"\n\n\
+         [web.app]\ntitle = \"{name}\"\n\n\
+         [web.resource]\nstyle = []\nscript = []\n\n\
+         [bundle]\nidentifier = \"{bundle_id}\"\npublisher = \"Mayorana\"\n\
+         icon = [\"assets/icon.png\"]\nname = \"{name}\"\n"
+    );
+    std::fs::write(dir.join("Dioxus.toml"), &dioxus_toml)
+        .map_err(|e| format!("Cannot write Dioxus.toml: {e}"))?;
+
+    // ── src/main.rs ───────────────────────────────────────────────────────────
+    let main_rs = format!(
+        "use dioxus::prelude::*;\n\nfn main() {{\n    dioxus::launch(App);\n}}\n\n\
+         #[component]\nfn App() -> Element {{\n    rsx! {{\n        div {{\n\
+             h1 {{ \"{name}\" }}\n            p {{ \"Hello, world!\" }}\n        }}\n    }}\n}}\n"
+    );
+    std::fs::write(src_dir.join("main.rs"), &main_rs)
+        .map_err(|e| format!("Cannot write src/main.rs: {e}"))?;
+
+    // ── .gitignore ────────────────────────────────────────────────────────────
+    let gitignore = "/target\nappscreens.json\n.env\n";
+    // Only create if not already present
+    let gi_path = dir.join(".gitignore");
+    if !gi_path.exists() {
+        let _ = std::fs::write(gi_path, gitignore);
+    }
+
+    // ── Entitlements.plist (iOS only) ─────────────────────────────────────────
+    if platform.has_ios() {
+        let entitlements = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+             <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\"\n\
+             \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+             <plist version=\"1.0\">\n<dict>\n\
+             \t<key>application-identifier</key>\n\
+             \t<string>{bundle_id}</string>\n\
+             \t<key>get-task-allow</key>\n\
+             \t<false/>\n\
+             </dict>\n</plist>\n"
+        );
+        let _ = std::fs::write(dir.join("Entitlements.plist"), &entitlements);
+        let _ = std::fs::write(dir.join("build_number.txt"), "1\n");
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // App phase
 // ---------------------------------------------------------------------------
 #[derive(Clone, Debug, PartialEq)]
@@ -1192,6 +1326,25 @@ fn App() -> Element {
 fn ProjectPicker(on_open: EventHandler<PathBuf>) -> Element {
     let settings = use_context::<Signal<Settings>>();
 
+    // "New Project" wizard state
+    let mut show_new = use_signal(|| false);
+    let mut new_name     = use_signal(|| String::new());
+    let mut new_slug     = use_signal(|| String::new());
+    let mut new_bundle   = use_signal(|| String::new());
+    let mut new_platform = use_signal(|| PlatformType::IosAndroid);
+    let mut new_parent   = use_signal(|| Option::<PathBuf>::None);
+    let mut create_error = use_signal(|| Option::<String>::None);
+
+    // Derive slug and bundle from name automatically (user can override)
+    let auto_slug = {
+        let n = new_name.read().to_lowercase();
+        n.chars().filter(|c| c.is_alphanumeric() || *c == '_').collect::<String>()
+    };
+    let auto_bundle = {
+        let s = if new_slug.read().is_empty() { auto_slug.clone() } else { new_slug.read().clone() };
+        if s.is_empty() { "com.company.app".to_string() } else { format!("com.mayorana.{s}") }
+    };
+
     rsx! {
         div { class: "picker-screen",
             div { class: "picker-inner",
@@ -1200,22 +1353,191 @@ fn ProjectPicker(on_open: EventHandler<PathBuf>) -> Element {
                     p { class: "picker-subtitle", "App Store & Play Store screenshot generator" }
                 }
 
-                button {
-                    class: "btn btn-primary picker-new-btn",
-                    onclick: move |_| {
-                        spawn(async move {
-                            if let Some(folder) = rfd::AsyncFileDialog::new()
-                                .set_title("Choose or create a project folder")
-                                .pick_folder()
-                                .await
-                            {
-                                on_open.call(folder.path().to_path_buf());
-                            }
-                        });
-                    },
-                    "Open / Create Project Folder…"
+                // ── Action buttons row ──────────────────────────────────────
+                div { class: "picker-actions",
+                    button {
+                        class: "btn btn-primary picker-new-btn",
+                        onclick: move |_| {
+                            let currently = *show_new.read();
+                            show_new.set(!currently);
+                            create_error.set(None);
+                        },
+                        if *show_new.read() { "✕  Cancel" } else { "✦  New Project…" }
+                    }
+                    button {
+                        class: "btn picker-open-btn",
+                        onclick: move |_| {
+                            spawn(async move {
+                                if let Some(folder) = rfd::AsyncFileDialog::new()
+                                    .set_title("Open existing project folder")
+                                    .pick_folder()
+                                    .await
+                                {
+                                    on_open.call(folder.path().to_path_buf());
+                                }
+                            });
+                        },
+                        "📂  Open Existing…"
+                    }
                 }
 
+                // ── New Project wizard (inline) ──────────────────────────────
+                if *show_new.read() {
+                    div { class: "new-project-panel",
+                        h3 { class: "new-project-title", "Create New Project" }
+
+                        // App Name
+                        div { class: "build-config-field",
+                            label { class: "build-config-label", "App Name" }
+                            input {
+                                class: "text-input",
+                                placeholder: "My App",
+                                value: "{new_name.read()}",
+                                oninput: move |e: Event<FormData>| {
+                                    let v = e.value();
+                                    // Auto-derive slug when empty
+                                    if new_slug.read().is_empty() {
+                                        // leave blank so auto_slug kicks in
+                                    }
+                                    new_name.set(v);
+                                }
+                            }
+                        }
+
+                        // Slug (auto-derived, editable)
+                        div { class: "build-config-field",
+                            label { class: "build-config-label", "Project Slug" }
+                            input {
+                                class: "text-input",
+                                placeholder: "{auto_slug}",
+                                value: "{new_slug.read()}",
+                                oninput: move |e: Event<FormData>| new_slug.set(e.value())
+                            }
+                            p { class: "settings-hint", "Lowercase identifier — leave blank to auto-derive from App Name" }
+                        }
+
+                        // Bundle ID
+                        div { class: "build-config-field",
+                            label { class: "build-config-label", "Bundle ID" }
+                            input {
+                                class: "text-input",
+                                placeholder: "{auto_bundle}",
+                                value: "{new_bundle.read()}",
+                                oninput: move |e: Event<FormData>| new_bundle.set(e.value())
+                            }
+                            p { class: "settings-hint", "Leave blank for com.mayorana.&lt;slug&gt;" }
+                        }
+
+                        // Platform selector
+                        div { class: "build-config-field",
+                            label { class: "build-config-label", "Platform" }
+                            div { class: "platform-selector",
+                                for plat in [PlatformType::IosAndroid, PlatformType::Ios, PlatformType::Android, PlatformType::Desktop] {
+                                    {
+                                        let label = plat.label();
+                                        let is_selected = *new_platform.read() == plat;
+                                        let plat2 = plat.clone();
+                                        rsx! {
+                                            button {
+                                                class: if is_selected { "platform-btn platform-btn-active" } else { "platform-btn" },
+                                                onclick: move |_| new_platform.set(plat2.clone()),
+                                                "{label}"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Parent folder picker
+                        div { class: "build-config-field",
+                            label { class: "build-config-label", "Location" }
+                            div { class: "folder-pick-row",
+                                button {
+                                    class: "btn",
+                                    onclick: move |_| {
+                                        spawn(async move {
+                                            if let Some(folder) = rfd::AsyncFileDialog::new()
+                                                .set_title("Choose parent folder for new project")
+                                                .pick_folder()
+                                                .await
+                                            {
+                                                new_parent.set(Some(folder.path().to_path_buf()));
+                                            }
+                                        });
+                                    },
+                                    "Choose Folder…"
+                                }
+                                if let Some(p) = new_parent.read().clone() {
+                                    span { class: "folder-pick-path", "{p.to_string_lossy()}" }
+                                } else {
+                                    span { class: "folder-pick-hint", "No folder selected" }
+                                }
+                            }
+                        }
+
+                        // Error banner
+                        if let Some(err) = create_error.read().clone() {
+                            p { class: "new-project-error", "{err}" }
+                        }
+
+                        // Create button
+                        button {
+                            class: "btn btn-primary",
+                            onclick: {
+                                let on_open2 = on_open.clone();
+                                move |_| {
+                                    let name_val  = new_name.read().trim().to_string();
+                                    let slug_raw  = new_slug.read().trim().to_string();
+                                    let slug_val  = if slug_raw.is_empty() { auto_slug.clone() } else { slug_raw };
+                                    let bundle_raw = new_bundle.read().trim().to_string();
+                                    let bundle_val = if bundle_raw.is_empty() { auto_bundle.clone() } else { bundle_raw };
+                                    let plat_val  = new_platform.read().clone();
+                                    let parent    = new_parent.read().clone();
+
+                                    if name_val.is_empty() {
+                                        create_error.set(Some("App Name is required.".into()));
+                                        return;
+                                    }
+                                    if slug_val.is_empty() {
+                                        create_error.set(Some("Could not derive a slug — please fill in Project Slug.".into()));
+                                        return;
+                                    }
+                                    let Some(parent_dir) = parent else {
+                                        create_error.set(Some("Please choose a parent folder.".into()));
+                                        return;
+                                    };
+
+                                    let project_dir = parent_dir.join(&slug_val);
+                                    match scaffold_new_project(&project_dir, &name_val, &slug_val, &bundle_val, &plat_val) {
+                                        Ok(()) => {
+                                            // Pre-populate appscreens.json with the config so
+                                            // ProjectView opens with all fields filled in.
+                                            let mut state = ProjectState::with_defaults();
+                                            state.app_name     = name_val;
+                                            state.project_slug = slug_val;
+                                            state.bundle_id    = bundle_val;
+                                            state.platform_type = plat_val;
+                                            // Disable iOS/Android targets for desktop-only projects
+                                            if state.platform_type.has_desktop() && !state.platform_type.has_ios() {
+                                                state.export_ios     = false;
+                                                state.export_android = false;
+                                            }
+                                            save_project_state(&project_dir, &state);
+                                            show_new.set(false);
+                                            create_error.set(None);
+                                            on_open2.call(project_dir);
+                                        }
+                                        Err(e) => create_error.set(Some(e)),
+                                    }
+                                }
+                            },
+                            "🚀  Create Project"
+                        }
+                    }
+                }
+
+                // ── Recent Projects ──────────────────────────────────────────
                 if !settings.read().recent_projects.is_empty() {
                     div { class: "picker-recents",
                         p { class: "picker-recents-label", "Recent Projects" }
@@ -2364,6 +2686,35 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                         }
                         p { class: "settings-hint", "iOS & Android bundle ID, e.g. \"com.co.app\"" }
                     }
+                    // Platform selector
+                    div { class: "build-config-field",
+                        label { class: "build-config-label", "Platform" }
+                        div { class: "platform-selector",
+                            for plat in [PlatformType::IosAndroid, PlatformType::Ios, PlatformType::Android, PlatformType::Desktop] {
+                                {
+                                    let label = plat.label();
+                                    let is_selected = proj.read().platform_type == plat;
+                                    let plat2 = plat.clone();
+                                    let proj_dir_save = project_dir.clone();
+                                    rsx! {
+                                        button {
+                                            class: if is_selected { "platform-btn platform-btn-active" } else { "platform-btn" },
+                                            onclick: move |_| {
+                                                let mut p = proj.write();
+                                                p.platform_type = plat2.clone();
+                                                // Sync export checkboxes to match platform
+                                                p.export_ios     = p.platform_type.has_ios();
+                                                p.export_android = p.platform_type.has_android();
+                                                save_project_state(&proj_dir_save, &p);
+                                            },
+                                            "{label}"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        p { class: "settings-hint", "Controls which export targets are shown below" }
+                    }
                 }
             }
 
@@ -2407,7 +2758,53 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                 h2 { "3. Export Settings" }
                 div { class: "export-settings-grid",
 
+                    // Desktop targets (only for Desktop platform)
+                    if proj.read().platform_type.has_desktop() {
+                        div { class: "export-section",
+                            div { class: "export-platform-header",
+                                span { class: "export-platform-label", "🖥  Desktop" }
+                            }
+                            div { class: "export-targets",
+                                for (ti, &(_, tname, tw, th)) in DESKTOP_TARGETS.iter().enumerate() {
+                                    {
+                                        let ti = ti;
+                                        let checked = proj.read().desktop_targets.get(ti).copied().unwrap_or(true);
+                                        let proj_dir_save = project_dir.clone();
+                                        let chk_id = format!("chk-desktop-{ti}");
+                                        rsx! {
+                                            div { class: "export-target-row",
+                                                input {
+                                                    r#type: "checkbox",
+                                                    id: "{chk_id}",
+                                                    checked: checked,
+                                                    onchange: {
+                                                        let proj_dir_save = proj_dir_save.clone();
+                                                        move |e: Event<FormData>| {
+                                                            let mut p = proj.write();
+                                                            if ti < p.desktop_targets.len() {
+                                                                p.desktop_targets[ti] = e.value() == "true";
+                                                            }
+                                                            save_project_state(&proj_dir_save, &p);
+                                                        }
+                                                    }
+                                                }
+                                                label { r#for: "{chk_id}", class: "export-target-label",
+                                                    span { class: "export-target-name", "{tname}" }
+                                                    span { class: "export-target-dim", "{tw}×{th}" }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            p { class: "settings-hint",
+                                "Run your desktop app and take a screenshot, then add the screenshot as a source image above."
+                            }
+                        }
+                    }
+
                     // iOS targets
+                    if proj.read().platform_type.has_ios() || proj.read().export_ios {
                     div { class: "export-section",
                         div { class: "export-platform-header",
                             input {
@@ -2461,8 +2858,10 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                             }
                         }
                     }
+                    } // end if has_ios
 
                     // Android targets
+                    if proj.read().platform_type.has_android() || proj.read().export_android {
                     div { class: "export-section",
                         div { class: "export-platform-header",
                             input {
@@ -2516,6 +2915,8 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                             }
                         }
                     }
+                    } // end if has_android
+
                     // Colors
                     div { class: "export-section",
                         p { class: "export-section-label", "Colors" }
