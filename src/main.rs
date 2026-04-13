@@ -796,12 +796,31 @@ BUILD_GRADLE="$BUILD_DIR/app/build.gradle.kts"
 OLD_PACKAGE="{old_package}"
 NEW_PACKAGE="{android_package}"
 
-if grep -q "$OLD_PACKAGE" "$BUILD_GRADLE"; then
-    echo "   Updating package to $NEW_PACKAGE..."
+# Extract version info and auto-increment
+V_CODE=$(grep "version_code" Dioxus.toml | awk -F'=' '{{print $2}}' | tr -d ' ')
+V_CODE=$((V_CODE + 1)) 
+sed -i '' "s/version_code *= *[0-9]*/version_code = $V_CODE/g" Dioxus.toml
+echo "🚀 Auto-incremented version_code to $V_CODE in Dioxus.toml"
+
+V_NAME=$(grep "version_name" Dioxus.toml | awk -F'=' '{{print $2}}' | tr -d ' "')
+
+echo "   Package: $NEW_PACKAGE"
+echo "   Version: $V_NAME ($V_CODE)"
+
+if grep -q "$OLD_PACKAGE" "$BUILD_GRADLE" || grep -q "versionCode" "$BUILD_GRADLE"; then
+    echo "   Updating build.gradle.kts..."
+    # Fix package name
     sed -i '' "s/$OLD_PACKAGE/$NEW_PACKAGE/g" "$BUILD_GRADLE"
+    
+    # Fix Version Code
+    sed -i '' "s/versionCode *= *[0-9]*/versionCode = $V_CODE/g" "$BUILD_GRADLE"
+    
+    # Fix Version Name
+    sed -i '' "s/versionName *= *\".*\"/versionName = \"$V_NAME\"/g" "$BUILD_GRADLE"
+
     find "$BUILD_DIR/app/src" -name "*.kt" -type f -exec sed -i '' "s/$OLD_PACKAGE/$NEW_PACKAGE/g" {{}} \;
     find "$BUILD_DIR/app/src" -name "AndroidManifest.xml" -type f -exec sed -i '' "s/$OLD_PACKAGE/$NEW_PACKAGE/g" {{}} \;
-    find "$BUILD_DIR/app/src" -name "AndroidManifest.xml" -type f -exec sed -i '' 's/android:label="@string\/app_name"/android:label="{app_name}"/g' {{}} \;
+    find "$BUILD_DIR/app/src" -name "AndroidManifest.xml" -type f -exec sed -i '' "s/android:label=\\\"@string\\/app_name\\\"/android:label=\\\"{app_name}\\\"/g" {{}} \;
 fi
 
 # 4. Inject Signing Config
@@ -839,9 +858,10 @@ cd "$BUILD_DIR"
 ./gradlew bundleRelease
 
 # 6. Verify and Move
-# Find the AAB dynamically — Gradle may name it after the project, not "app-release.aab"
-OUTPUT_AAB=$(find "app/build/outputs/bundle/release" -name "*.aab" 2>/dev/null | head -1)
-if [ -n "$OUTPUT_AAB" ] && [ -f "$OUTPUT_AAB" ]; then
+# Standard Gradle output for signed release is 'app-release.aab'
+# Do NOT use 'find' because it picks up the unsigned architecture-specific bundles instead of the final signed universal bundle.
+OUTPUT_AAB="app/build/outputs/bundle/release/app-release.aab"
+if [ -f "$OUTPUT_AAB" ]; then
     echo "✅ AAB Generated: $OUTPUT_AAB"
     cd - > /dev/null
     TARGET_NAME="${{PROJECT_NAME}}_release.aab"
@@ -1607,6 +1627,24 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
     let mut android_publish_log = use_signal(|| Vec::<String>::new());
     let mut build_phase = use_signal(|| BuildPhase::Idle);
     let mut build_log = use_signal(|| Vec::<String>::new());
+
+    // Auto-scroll logs to bottom whenever they update
+    use_effect(move || {
+        let _ = log_lines.read().len();
+        let _ = build_log.read().len();
+        let _ = publish_log.read().len();
+        let _ = android_publish_log.read().len();
+        
+        let js = r#"
+            setTimeout(() => {
+                let els = document.querySelectorAll('.log-scroll');
+                for (let el of els) {
+                    el.scrollTop = el.scrollHeight;
+                }
+            }, 50);
+        "#;
+        spawn(async move { document::eval(js).await.ok(); });
+    });
 
     let proj_dir = project_dir.clone();
     let proj_dir2 = project_dir.clone();
