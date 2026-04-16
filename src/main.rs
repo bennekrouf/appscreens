@@ -245,8 +245,14 @@ struct ProjectState {
     app_name: String,      // Display name, e.g. "Abjad"
     #[serde(default)]
     project_slug: String,  // Lowercase dx slug, e.g. "abjad"
+    /// Legacy single bundle ID field — kept for deserialization of old JSON only.
+    /// On load this is migrated into ios_bundle_id / android_bundle_id and then ignored.
+    #[serde(default, skip_serializing)]
+    bundle_id: String,
     #[serde(default)]
-    bundle_id: String,     // iOS + Android bundle ID, e.g. "com.mayorana.tafseel.abjad"
+    ios_bundle_id: String,     // iOS bundle ID, e.g. "com.mayorana.tafseel.mufrad"
+    #[serde(default)]
+    android_bundle_id: String, // Android package, e.g. "com.mayorana.mufrad"
     #[serde(default)]
     platform_type: PlatformType,  // Target platform(s) for this project
     // Export configuration
@@ -334,6 +340,16 @@ impl ProjectState {
         // Keep legacy locale field in sync
         if let Some(first) = self.locales.first() {
             self.locale = first.clone();
+        }
+        // Migrate legacy single bundle_id → ios_bundle_id / android_bundle_id.
+        // Only copy when the new fields are still empty (first open of an old project).
+        if !self.bundle_id.is_empty() {
+            if self.ios_bundle_id.is_empty() {
+                self.ios_bundle_id = self.bundle_id.clone();
+            }
+            if self.android_bundle_id.is_empty() {
+                self.android_bundle_id = self.bundle_id.clone();
+            }
         }
     }
     /// Return the source paths for a given locale.
@@ -723,12 +739,8 @@ fn script_android_release(app_name: &str, project_slug: &str, bundle_id: &str) -
     // Password for mayorana-release.keystore; abjad uses its own keystore with "android".
     let key_pass_snippet = if is_abjad { r#"KEY_PASS="android""# } else { r#"KEY_PASS="Salma2026!""# };
 
-    // Special case for Android package name to bypass Play Console lock
-    let android_package = if bundle_id == "com.mayorana.tafseel.abjad" {
-        "com.mayorana.abjad"
-    } else {
-        bundle_id
-    };
+    // android_bundle_id is passed directly — callers already resolved iOS vs Android split.
+    let android_package = bundle_id;
 
     // OLD_PACKAGE is what dx generates by default (com.example.Title-cased slug)
     let title_case = {
@@ -934,6 +946,8 @@ echo "✅ Build complete"
 
 /// Generate `build_apk.sh` (debug/installable APK)
 fn script_build_apk(app_name: &str, project_slug: &str, bundle_id: &str) -> String {
+    // android_bundle_id is passed directly — callers already resolved iOS vs Android split.
+    let android_package = bundle_id;
     let title_case = {
         let mut c = project_slug.chars();
         match c.next() {
@@ -984,7 +998,7 @@ echo "✅ Icons copied successfully."
 BUILD_DIR="target/dx/$PROJECT_NAME/release/android/app"
 BUILD_GRADLE="$BUILD_DIR/app/build.gradle.kts"
 OLD_PACKAGE="{old_package}"
-NEW_PACKAGE="{bundle_id}"
+NEW_PACKAGE="{android_package}"
 
 if grep -q "$OLD_PACKAGE" "$BUILD_GRADLE"; then
     echo "⚠️  Incorrect package name detected ($OLD_PACKAGE)."
@@ -1055,7 +1069,8 @@ fn ensure_build_scripts(
     project_dir: &PathBuf,
     app_name: &str,
     project_slug: &str,
-    bundle_id: &str,
+    ios_bundle_id: &str,
+    android_bundle_id: &str,
     identity: &str,
     provisioning_profile: &str,
     short_version: &str,
@@ -1063,19 +1078,19 @@ fn ensure_build_scripts(
     let scripts: &[(&str, String)] = &[
         (
             "build_ios_distribution.sh",
-            script_ios_distribution(app_name, project_slug, bundle_id, identity, provisioning_profile, short_version),
+            script_ios_distribution(app_name, project_slug, ios_bundle_id, identity, provisioning_profile, short_version),
         ),
         (
             "build_android_release.sh",
-            script_android_release(app_name, project_slug, bundle_id),
+            script_android_release(app_name, project_slug, android_bundle_id),
         ),
         (
             "build_android.sh",
-            script_android(app_name, project_slug, bundle_id),
+            script_android(app_name, project_slug, android_bundle_id),
         ),
         (
             "build_apk.sh",
-            script_build_apk(app_name, project_slug, bundle_id),
+            script_build_apk(app_name, project_slug, android_bundle_id),
         ),
     ];
 
@@ -1534,9 +1549,10 @@ fn ProjectPicker(on_open: EventHandler<PathBuf>) -> Element {
                                             // Pre-populate appscreens.json with the config so
                                             // ProjectView opens with all fields filled in.
                                             let mut state = ProjectState::with_defaults();
-                                            state.app_name     = name_val;
-                                            state.project_slug = slug_val;
-                                            state.bundle_id    = bundle_val;
+                                            state.app_name          = name_val;
+                                            state.project_slug      = slug_val;
+                                            state.ios_bundle_id     = bundle_val.clone();
+                                            state.android_bundle_id = bundle_val;
                                             state.platform_type = plat_val;
                                             // Disable iOS/Android targets for desktop-only projects
                                             if state.platform_type.has_desktop() && !state.platform_type.has_ios() {
@@ -1704,7 +1720,7 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
             output_tab.set(OutputTab::Publish);
 
             // Snapshot project state needed inside the async block.
-            let bundle_id    = proj.read().bundle_id.clone();
+            let bundle_id    = proj.read().ios_bundle_id.clone(); // ASC lookup uses iOS bundle ID
             let locales      = proj.read().locales.clone();
             let output_paths = proj.read().output_paths.clone();
             let app_name     = proj.read().app_name.clone();
@@ -1893,7 +1909,7 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
             output_tab.set(OutputTab::Publish);
 
             // Snapshot what we need from project state before moving into async.
-            let bundle_id = proj.read().bundle_id.clone();
+            let bundle_id = proj.read().android_bundle_id.clone(); // Google Play uses Android package name
             let output_paths = proj.read().output_paths.clone();
 
             let proj_dir = proj_dir.clone();
@@ -2095,16 +2111,19 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
         move |script_name: String| {
             let app_name = proj.read().app_name.clone();
             let project_slug = proj.read().project_slug.clone();
-            let bundle_id = proj.read().bundle_id.clone();
+            let ios_bundle_id = proj.read().ios_bundle_id.clone();
+            let android_bundle_id = proj.read().android_bundle_id.clone();
             let identity = settings.read().apple_identity.clone();
             let profile = settings.read().provisioning_profile.clone();
             let short_version = settings.read().ios_short_version.clone();
             let logo_path = proj.read().logo_path.clone();
 
             // Validate required fields
-            if app_name.trim().is_empty() || project_slug.trim().is_empty() || bundle_id.trim().is_empty() {
+            if app_name.trim().is_empty() || project_slug.trim().is_empty()
+                || (ios_bundle_id.trim().is_empty() && android_bundle_id.trim().is_empty())
+            {
                 build_phase.set(BuildPhase::Error(
-                    "App Name, Project Slug, and Bundle ID are required. Fill them in the Build Config card.".into()
+                    "App Name, Project Slug, and at least one Bundle ID are required. Fill them in the Build Config card.".into()
                 ));
                 output_tab.set(OutputTab::Build);
                 return;
@@ -2151,11 +2170,12 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                     let dir = dir.clone();
                     let app_name = app_name.clone();
                     let project_slug = project_slug.clone();
-                    let bundle_id = bundle_id.clone();
+                    let ios_bundle_id = ios_bundle_id.clone();
+                    let android_bundle_id = android_bundle_id.clone();
                     let identity = identity.clone();
                     let profile = profile.clone();
                     let short_version = short_version.clone();
-                    move || ensure_build_scripts(&dir, &app_name, &project_slug, &bundle_id, &identity, &profile, &short_version)
+                    move || ensure_build_scripts(&dir, &app_name, &project_slug, &ios_bundle_id, &android_bundle_id, &identity, &profile, &short_version)
                 }).await.unwrap_or_default();
 
                 for name in &created {
@@ -2708,21 +2728,38 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                         p { class: "settings-hint", "Lowercase dx slug, e.g. \"abjad\"" }
                     }
                     div { class: "build-config-field",
-                        label { class: "build-config-label", "Bundle ID" }
+                        label { class: "build-config-label", "iOS Bundle ID" }
                         input {
                             class: "text-input",
                             placeholder: "com.company.app",
-                            value: "{proj.read().bundle_id}",
+                            value: "{proj.read().ios_bundle_id}",
                             oninput: {
                                 let proj_dir_save = project_dir.clone();
                                 move |e: Event<FormData>| {
                                     let mut p = proj.write();
-                                    p.bundle_id = e.value();
+                                    p.ios_bundle_id = e.value();
                                     save_project_state(&proj_dir_save, &p);
                                 }
                             }
                         }
-                        p { class: "settings-hint", "iOS & Android bundle ID, e.g. \"com.co.app\"" }
+                        p { class: "settings-hint", "iOS bundle ID, e.g. \"com.mayorana.tafseel.mufrad\"" }
+                    }
+                    div { class: "build-config-field",
+                        label { class: "build-config-label", "Android Package" }
+                        input {
+                            class: "text-input",
+                            placeholder: "com.company.app",
+                            value: "{proj.read().android_bundle_id}",
+                            oninput: {
+                                let proj_dir_save = project_dir.clone();
+                                move |e: Event<FormData>| {
+                                    let mut p = proj.write();
+                                    p.android_bundle_id = e.value();
+                                    save_project_state(&proj_dir_save, &p);
+                                }
+                            }
+                        }
+                        p { class: "settings-hint", "Android package name, e.g. \"com.mayorana.mufrad\"" }
                     }
                     // Platform selector
                     div { class: "build-config-field",
