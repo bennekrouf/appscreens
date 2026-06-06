@@ -73,6 +73,52 @@ jobs:
 
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
+  build-mac:
+    needs: [prepare]
+    if: always() && !failure() && !cancelled()
+    runs-on: macos-latest  # arm64 (Apple Silicon)
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag || github.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: release-macos-arm64-cargo-${{ hashFiles('Cargo.lock') }}
+
+      - name: Install dioxus-cli
+        run: cargo install dioxus-cli --locked
+
+      - name: Bundle
+        run: dx bundle --platform desktop --release --package-types dmg
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist
+          DMG=$(find target -type f -name "*.dmg" | head -1)
+          if [ -z "$DMG" ]; then
+            echo "::error::No .dmg produced by dx bundle"
+            exit 1
+          fi
+          cp "$DMG" dist/appscreens-macos-arm64.dmg
+          ls -lh dist/
+          (cd dist && shasum -a 256 * > SHA256SUMS-macos.txt)
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: appscreens-macos
+          path: dist/*
+
   build-linux:
     needs: [prepare]
     if: always() && !failure() && !cancelled()
@@ -114,7 +160,10 @@ jobs:
       - name: Collect artifacts
         run: |
           mkdir -p dist
-          find target -type f \( -name "*.deb" -o -name "*.AppImage" \) -exec cp {} dist/ \;
+          DEB=$(find target -type f -name "*.deb" | head -1)
+          APPIMAGE=$(find target -type f -name "*.AppImage" | head -1)
+          [ -n "$DEB" ]      && cp "$DEB"      dist/appscreens-linux-x86_64.deb
+          [ -n "$APPIMAGE" ] && cp "$APPIMAGE" dist/appscreens-linux-x86_64.AppImage
           ls -lh dist/
           (cd dist && sha256sum * > SHA256SUMS-linux.txt)
 
@@ -154,14 +203,22 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path dist -Force | Out-Null
-          Get-ChildItem -Path target -Recurse -Include *.msi,*.exe |
+          $msi = Get-ChildItem -Path target -Recurse -Filter *.msi |
             Where-Object { $_.FullName -match "bundle" } |
-            ForEach-Object { Copy-Item $_.FullName dist\ }
+            Select-Object -First 1
+          if (-not $msi) { Write-Error "No .msi produced by dx bundle"; exit 1 }
+          Copy-Item $msi.FullName dist\appscreens-windows-setup.msi
           Get-ChildItem dist
-          Get-ChildItem dist | ForEach-Object {
-            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
-            "$hash  $($_.Name)"
-          } | Out-File dist\SHA256SUMS-windows.txt -Encoding ASCII
+
+          # Materialize the file list BEFORE opening the sums file,
+          # and exclude the sums file itself so it can't hash itself.
+          $files = Get-ChildItem dist -File |
+            Where-Object { $_.Name -ne 'SHA256SUMS-windows.txt' }
+          $lines = foreach ($f in $files) {
+            $hash = (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($f.Name)"
+          }
+          Set-Content -Path dist\SHA256SUMS-windows.txt -Value $lines -Encoding ascii
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -170,7 +227,7 @@ jobs:
           path: dist/*
 
   release:
-    needs: [build-linux, build-windows]
+    needs: [build-mac, build-linux, build-windows]
     if: always() && !failure() && !cancelled()
     runs-on: ubuntu-latest
     permissions:
@@ -197,9 +254,10 @@ jobs:
           VER="${TAG#v}"
           BASE="https://github.com/$REPO/releases/download/$TAG"
 
-          LINUX_DEB=$(ls release/*.deb 2>/dev/null | head -1 | xargs -n1 basename || true)
-          LINUX_APPIMAGE=$(ls release/*.AppImage 2>/dev/null | head -1 | xargs -n1 basename || true)
-          WIN_MSI=$(ls release/*.msi 2>/dev/null | head -1 | xargs -n1 basename || true)
+          MAC_DMG="appscreens-macos-arm64.dmg"
+          LINUX_DEB="appscreens-linux-x86_64.deb"
+          LINUX_APPIMAGE="appscreens-linux-x86_64.AppImage"
+          WIN_MSI="appscreens-windows-setup.msi"
 
           sha() { [ -n "$1" ] && [ -f "release/$1" ] && sha256sum "release/$1" | awk '{print $1}' || echo ""; }
 
@@ -210,6 +268,9 @@ jobs:
             "tag": "$TAG",
             "released_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
             "platforms": {
+              "macos": {
+                "dmg": { "url": "$BASE/$MAC_DMG", "sha256": "$(sha "$MAC_DMG")" }
+              },
               "linux": {
                 "deb":      { "url": "$BASE/$LINUX_DEB",      "sha256": "$(sha "$LINUX_DEB")" },
                 "appimage": { "url": "$BASE/$LINUX_APPIMAGE", "sha256": "$(sha "$LINUX_APPIMAGE")" }
@@ -233,6 +294,10 @@ jobs:
             --title "AppScreens $TAG" \
             --notes "$(cat <<'EOF'
           ## Download
+
+          ### macOS (Apple Silicon)
+          Download the `.dmg`, open it, and drag AppScreens to /Applications.
+          The app is unsigned — on first launch, right-click the app → *Open* → confirm.
 
           ### Linux
           - **Debian / Ubuntu**: download the `.deb` and `sudo dpkg -i AppScreens_*.deb`

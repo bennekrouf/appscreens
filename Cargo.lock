@@ -59,7 +59,7 @@ dependencies = [
 
 [[package]]
 name = "appscreens"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ab_glyph",
  "dioxus",
