@@ -77,6 +77,11 @@ jobs:
     needs: [prepare]
     if: always() && !failure() && !cancelled()
     runs-on: macos-latest  # arm64 (Apple Silicon)
+    env:
+      SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+      APPLE_ID:         ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+      APPLE_TEAM_ID:    ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+      APPLE_PASSWORD:   ${{ secrets.MACOS_NOTARY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -98,20 +103,88 @@ jobs:
       - name: Install dioxus-cli
         run: cargo install dioxus-cli --locked
 
-      - name: Bundle
-        run: dx bundle --platform desktop --release --package-types dmg
-
-      - name: Collect artifacts
+      # ── Import Developer ID cert into a temporary keychain ──────────────────
+      - name: Set up signing keychain
+        env:
+          MACOS_CERTIFICATE:     ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          KEYCHAIN_PASSWORD:     ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
-          mkdir -p dist
-          DMG=$(find target -type f -name "*.dmg" | head -1)
-          if [ -z "$DMG" ]; then
-            echo "::error::No .dmg produced by dx bundle"
-            exit 1
-          fi
-          cp "$DMG" dist/appscreens-macos-arm64.dmg
-          ls -lh dist/
-          (cd dist && shasum -a 256 * > SHA256SUMS-macos.txt)
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+
+          echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+
+          security create-keychain  -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/cert.p12" \
+            -k "$KEYCHAIN_PATH" \
+            -P "$MACOS_CERTIFICATE_PWD" \
+            -T /usr/bin/codesign
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          rm "$RUNNER_TEMP/cert.p12"
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+
+      # ── Build the .app bundle (no dmg yet — we build & sign our own) ────────
+      - name: Bundle .app
+        run: dx bundle --platform desktop --release --package-types macos
+
+      - name: Codesign .app
+        run: |
+          set -euo pipefail
+          APP=$(find target -type d -name "*.app" | head -1)
+          if [ -z "$APP" ]; then echo "::error::No .app produced by dx bundle"; exit 1; fi
+          echo "Signing: $APP"
+          # Sign nested binaries first, then the bundle itself
+          codesign --force --options runtime --timestamp \
+            --entitlements .github/macos-entitlements.plist \
+            --sign "$SIGNING_IDENTITY" \
+            --deep \
+            "$APP"
+          codesign --verify --strict --verbose=2 "$APP"
+
+      - name: Create signed DMG
+        run: |
+          set -euo pipefail
+          APP=$(find target -type d -name "*.app" | head -1)
+          mkdir -p dist dmg-staging
+          cp -R "$APP" dmg-staging/
+          ln -s /Applications dmg-staging/Applications
+          hdiutil create \
+            -volname "AppScreens" \
+            -srcfolder dmg-staging \
+            -ov -format UDZO \
+            dist/appscreens-macos-arm64.dmg
+          codesign --force --timestamp \
+            --sign "$SIGNING_IDENTITY" \
+            dist/appscreens-macos-arm64.dmg
+
+      - name: Notarize and staple
+        run: |
+          set -euo pipefail
+          xcrun notarytool submit dist/appscreens-macos-arm64.dmg \
+            --apple-id "$APPLE_ID" \
+            --team-id  "$APPLE_TEAM_ID" \
+            --password "$APPLE_PASSWORD" \
+            --wait
+          xcrun stapler staple dist/appscreens-macos-arm64.dmg
+          xcrun stapler validate dist/appscreens-macos-arm64.dmg
+
+      - name: Hashes
+        run: |
+          cd dist
+          shasum -a 256 appscreens-macos-arm64.dmg > SHA256SUMS-macos.txt
+          ls -lh
+
+      - name: Clean up keychain
+        if: always()
+        run: |
+          security delete-keychain "$KEYCHAIN_PATH" || true
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -297,7 +370,7 @@ jobs:
 
           ### macOS (Apple Silicon)
           Download the `.dmg`, open it, and drag AppScreens to /Applications.
-          The app is unsigned — on first launch, right-click the app → *Open* → confirm.
+          Signed with Apple Developer ID and notarized — opens with a normal double-click.
 
           ### Linux
           - **Debian / Ubuntu**: download the `.deb` and `sudo dpkg -i AppScreens_*.deb`
