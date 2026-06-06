@@ -2,6 +2,22 @@
 name = "AppScreens"
 default_platform = "desktop"
 
+[bundle]
+identifier = "com.mayorana.appscreens"
+publisher = "Mayorana"
+copyright = "Copyright (c) 2026 Mayorana"
+category = "DeveloperTool"
+short_description = "Generate App Store and Play Store screenshots."
+long_description = "AppScreens generates marketing screenshots for the App Store and Google Play from a single source image."
+icon = ["assets/icon.png"]
+
+[bundle.linux]
+# .deb / .AppImage produced by cargo-bundle via `dx bundle`
+
+[bundle.windows]
+# Uses assets/favicon.ico as the app icon on Windows
+# Set WIX_PATH in CI if you need a custom WiX toolset
+
 [mobile]
 title = "AppScreens"
 bundle_identifier = "com.mayorana.appscreens"

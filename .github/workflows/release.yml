@@ -1,0 +1,249 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+  # ── Manual trigger from the GitHub Actions UI ──────────────────────────────
+  # Actions → Release → Run workflow → enter version (e.g. 0.1.1)
+  # Leave empty to auto-bump the patch version. Same effect as scripts/release.sh.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g. 0.1.1) — empty = auto-bump patch'
+        required: false
+        default: ''
+      bump:
+        description: 'Bump type if version is empty'
+        required: false
+        default: 'patch'
+        type: choice
+        options: [patch, minor, major]
+
+permissions:
+  contents: write
+
+jobs:
+  # ── When triggered via workflow_dispatch: bump version and create the tag ──
+  prepare:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.bump.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Bump version and tag
+        id: bump
+        env:
+          VERSION_INPUT: ${{ inputs.version }}
+          BUMP_TYPE: ${{ inputs.bump }}
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: github-actions[bot]@users.noreply.github.com
+        run: |
+          CURRENT=$(grep '^version' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+
+          if [[ -n "$VERSION_INPUT" ]]; then
+            NEW="$VERSION_INPUT"
+          elif [[ "$BUMP_TYPE" == "major" ]]; then
+            NEW="$((MAJOR+1)).0.0"
+          elif [[ "$BUMP_TYPE" == "minor" ]]; then
+            NEW="$MAJOR.$((MINOR+1)).0"
+          else
+            NEW="$MAJOR.$MINOR.$((PATCH+1))"
+          fi
+
+          TAG="v$NEW"
+          echo "Bumping $CURRENT → $NEW (tag: $TAG)"
+
+          sed -i "s/^version = \"$CURRENT\"/version = \"$NEW\"/" Cargo.toml
+
+          git add Cargo.toml
+          git commit -m "chore: release $TAG"
+          git tag "$TAG"
+          git push origin HEAD
+          git push origin "$TAG"
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+  build-linux:
+    needs: [prepare]
+    if: always() && !failure() && !cancelled()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag || github.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: release-linux-x86_64-cargo-${{ hashFiles('Cargo.lock') }}
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            pkg-config
+
+      - name: Install dioxus-cli
+        run: cargo install dioxus-cli --locked
+
+      - name: Bundle
+        run: dx bundle --platform desktop --release --package-types deb --package-types appimage
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist
+          find target -type f \( -name "*.deb" -o -name "*.AppImage" \) -exec cp {} dist/ \;
+          ls -lh dist/
+          (cd dist && sha256sum * > SHA256SUMS-linux.txt)
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: appscreens-linux
+          path: dist/*
+
+  build-windows:
+    needs: [prepare]
+    if: always() && !failure() && !cancelled()
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag || github.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: release-windows-cargo-${{ hashFiles('Cargo.lock') }}
+
+      - name: Install dioxus-cli
+        run: cargo install dioxus-cli --locked
+
+      - name: Bundle
+        run: dx bundle --platform desktop --release --package-types msi
+
+      - name: Collect artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          Get-ChildItem -Path target -Recurse -Include *.msi,*.exe |
+            Where-Object { $_.FullName -match "bundle" } |
+            ForEach-Object { Copy-Item $_.FullName dist\ }
+          Get-ChildItem dist
+          Get-ChildItem dist | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($_.Name)"
+          } | Out-File dist\SHA256SUMS-windows.txt -Encoding ASCII
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: appscreens-windows
+          path: dist/*
+
+  release:
+    needs: [build-linux, build-windows]
+    if: always() && !failure() && !cancelled()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p release
+          find artifacts -type f -exec cp {} release/ \;
+          ls -lh release/
+
+      - name: Generate latest.json
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          VER="${TAG#v}"
+          BASE="https://github.com/$REPO/releases/download/$TAG"
+
+          LINUX_DEB=$(ls release/*.deb 2>/dev/null | head -1 | xargs -n1 basename || true)
+          LINUX_APPIMAGE=$(ls release/*.AppImage 2>/dev/null | head -1 | xargs -n1 basename || true)
+          WIN_MSI=$(ls release/*.msi 2>/dev/null | head -1 | xargs -n1 basename || true)
+
+          sha() { [ -n "$1" ] && [ -f "release/$1" ] && sha256sum "release/$1" | awk '{print $1}' || echo ""; }
+
+          cat > release/latest.json <<EOF
+          {
+            "name": "AppScreens",
+            "version": "$VER",
+            "tag": "$TAG",
+            "released_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "platforms": {
+              "linux": {
+                "deb":      { "url": "$BASE/$LINUX_DEB",      "sha256": "$(sha "$LINUX_DEB")" },
+                "appimage": { "url": "$BASE/$LINUX_APPIMAGE", "sha256": "$(sha "$LINUX_APPIMAGE")" }
+              },
+              "windows": {
+                "msi": { "url": "$BASE/$WIN_MSI", "sha256": "$(sha "$WIN_MSI")" }
+              }
+            }
+          }
+          EOF
+          cat release/latest.json
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          FILES=$(find release -type f | tr '\n' ' ')
+
+          gh release create "$TAG" \
+            --title "AppScreens $TAG" \
+            --notes "$(cat <<'EOF'
+          ## Download
+
+          ### Linux
+          - **Debian / Ubuntu**: download the `.deb` and `sudo dpkg -i AppScreens_*.deb`
+          - **Other distros**: download the `.AppImage`, `chmod +x` it, and run
+
+          ### Windows
+          Download the `.msi` installer and run it. Windows SmartScreen may warn — click *More info → Run anyway* (the binary is unsigned).
+
+          ## For mayorana.ch
+          `latest.json` is attached to this release with download URLs and SHA-256 hashes.
+          Stable link: https://github.com/${{ github.repository }}/releases/latest/download/latest.json
+          EOF
+          )" \
+            $FILES
