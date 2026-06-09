@@ -79,9 +79,9 @@ jobs:
     runs-on: macos-latest  # arm64 (Apple Silicon)
     env:
       SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
-      APPLE_ID:         ${{ secrets.MACOS_NOTARY_APPLE_ID }}
-      APPLE_TEAM_ID:    ${{ secrets.MACOS_NOTARY_TEAM_ID }}
-      APPLE_PASSWORD:   ${{ secrets.MACOS_NOTARY_PASSWORD }}
+      APP_STORE_KEY:        ${{ secrets.APP_STORE_CONNECT_KEY }}
+      APP_STORE_KEY_ID:     ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+      APP_STORE_ISSUER_ID:  ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -102,6 +102,28 @@ jobs:
 
       - name: Install dioxus-cli
         run: cargo install dioxus-cli --locked
+
+      # ── Sanity-check required signing secrets up front ─────────────────────
+      - name: Verify macOS signing secrets are present
+        env:
+          MACOS_CERTIFICATE:     ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          KEYCHAIN_PASSWORD:     ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          missing=()
+          [ -z "${SIGNING_IDENTITY:-}"      ] && missing+=("MACOS_SIGNING_IDENTITY")
+          [ -z "${APP_STORE_KEY:-}"        ] && missing+=("APP_STORE_CONNECT_KEY")
+          [ -z "${APP_STORE_KEY_ID:-}"     ] && missing+=("APP_STORE_CONNECT_KEY_ID")
+          [ -z "${APP_STORE_ISSUER_ID:-}"  ] && missing+=("APP_STORE_CONNECT_ISSUER_ID")
+          [ -z "${MACOS_CERTIFICATE:-}"     ] && missing+=("MACOS_CERTIFICATE")
+          [ -z "${MACOS_CERTIFICATE_PWD:-}" ] && missing+=("MACOS_CERTIFICATE_PWD")
+          [ -z "${KEYCHAIN_PASSWORD:-}"     ] && missing+=("KEYCHAIN_PASSWORD")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing GitHub Actions secrets: ${missing[*]}"
+            echo "Add them in: Settings → Secrets and variables → Actions"
+            exit 1
+          fi
+          echo "All 7 macOS signing secrets present."
 
       # ── Import Developer ID cert into a temporary keychain ──────────────────
       - name: Set up signing keychain
@@ -167,10 +189,13 @@ jobs:
       - name: Notarize and staple
         run: |
           set -euo pipefail
+          P8="$RUNNER_TEMP/AuthKey_${APP_STORE_KEY_ID}.p8"
+          echo "$APP_STORE_KEY" | base64 --decode > "$P8"
+
           xcrun notarytool submit dist/appscreens-macos-arm64.dmg \
-            --apple-id "$APPLE_ID" \
-            --team-id  "$APPLE_TEAM_ID" \
-            --password "$APPLE_PASSWORD" \
+            --key "$P8" \
+            --key-id "$APP_STORE_KEY_ID" \
+            --issuer "$APP_STORE_ISSUER_ID" \
             --wait
           xcrun stapler staple dist/appscreens-macos-arm64.dmg
           xcrun stapler validate dist/appscreens-macos-arm64.dmg

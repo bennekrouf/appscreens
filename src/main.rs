@@ -1251,22 +1251,10 @@ enum AndroidPublishPhase {
 fn main() {
     tracing_subscriber::fmt::init();
 
-    let (icon_rgba, icon_width, icon_height) = {
-        let img = image::load_from_memory(include_bytes!("../assets/icon.png"))
-            .expect("Failed to load icon")
-            .into_rgba8();
-        let (width, height) = img.dimensions();
-        let rgba = img.into_raw();
-        (rgba, width, height)
-    };
-
-    let icon = dioxus::desktop::tao::window::Icon::from_rgba(icon_rgba, icon_width, icon_height)
-        .expect("Failed to create icon");
-
     let config = dioxus::desktop::Config::new().with_window(
         WindowBuilder::new()
             .with_title("AppScreens")
-            .with_window_icon(Some(icon))
+            .with_window_icon(make_icon())
             .with_inner_size(LogicalSize::new(1020.0, 860.0))
             .with_focused(true)
             .with_decorations(true)
@@ -1274,6 +1262,67 @@ fn main() {
     );
 
     LaunchBuilder::desktop().with_cfg(config).launch(App);
+}
+
+// ── Procedural window icon (mirrors ais-runner's style) ─────────────────────
+// Circular mask + blue→purple gradient + white symbol. Drawn in pure Rust so
+// the binary stays self-contained — no PNG asset to ship.
+fn make_icon() -> Option<dioxus::desktop::tao::window::Icon> {
+    const SIZE: u32 = 64;
+    let mut rgba = Vec::with_capacity((SIZE * SIZE * 4) as usize);
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            // Circular mask
+            let cx = x as f32 - SIZE as f32 / 2.0 + 0.5;
+            let cy = y as f32 - SIZE as f32 / 2.0 + 0.5;
+            let r_sq = cx * cx + cy * cy;
+            let radius = SIZE as f32 / 2.0;
+            let alpha = if r_sq > (radius * radius) { 0u8 } else { 255u8 };
+
+            // Gradient: top-left blue → bottom-right purple (AppScreens identity)
+            let t = (x + y) as f32 / (SIZE * 2) as f32;
+            let r = (0.0_f32 + t * 120.0) as u8;
+            let g = (120.0 - t * 60.0) as u8;
+            let b = (212.0 - t * 20.0) as u8;
+
+            // White phone-screens shape: two slightly-offset rounded rectangles
+            // suggesting the App Store / Play Store dual export.
+            let in_shape = is_screens_shape(x, y, SIZE);
+            let (r, g, b) = if in_shape { (255u8, 255u8, 255u8) } else { (r, g, b) };
+
+            rgba.extend_from_slice(&[r, g, b, alpha]);
+        }
+    }
+    dioxus::desktop::tao::window::Icon::from_rgba(rgba, SIZE, SIZE).ok()
+}
+
+fn is_screens_shape(x: u32, y: u32, size: u32) -> bool {
+    let s = size as f32;
+    let fx = x as f32;
+    let fy = y as f32;
+
+    // Front phone: rounded rect, slight tilt right
+    let phone = |cx: f32, cy: f32, w: f32, h: f32, corner: f32| -> bool {
+        let left   = cx - w / 2.0;
+        let right  = cx + w / 2.0;
+        let top    = cy - h / 2.0;
+        let bottom = cy + h / 2.0;
+        if fx < left || fx > right || fy < top || fy > bottom { return false; }
+        // Round the corners
+        let dx = if fx < left + corner { left + corner - fx }
+                 else if fx > right - corner { fx - (right - corner) }
+                 else { 0.0 };
+        let dy = if fy < top + corner { top + corner - fy }
+                 else if fy > bottom - corner { fy - (bottom - corner) }
+                 else { 0.0 };
+        dx * dx + dy * dy <= corner * corner
+    };
+
+    // Back phone (offset up-left)
+    if phone(s * 0.42, s * 0.45, s * 0.32, s * 0.48, s * 0.05) { return true; }
+    // Front phone (offset down-right)
+    if phone(s * 0.58, s * 0.55, s * 0.32, s * 0.48, s * 0.05) { return true; }
+    false
 }
 
 // ---------------------------------------------------------------------------
@@ -1287,6 +1336,31 @@ fn App() -> Element {
 
     // Active project dir (None = show project picker)
     let mut project_dir = use_signal(|| Option::<PathBuf>::None);
+
+    // ── Theme (matches ais-runner) ────────────────────────────────────────
+    // Initialise from system, then keep in sync — but stop syncing once the
+    // user manually toggles via the button.
+    let system_light = dark_light::detect() != dark_light::Mode::Dark;
+    let mut is_light          = use_signal(|| system_light);
+    let mut theme_overridden  = use_signal(|| false);
+
+    use_effect(move || {
+        let cls = if *is_light.read() { "light" } else { "" };
+        document::eval(&format!("document.body.className = '{}';", cls));
+    });
+
+    use_coroutine(move |_rx: dioxus::prelude::UnboundedReceiver<()>| async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+            if *theme_overridden.read() { continue; }
+            let light = tokio::task::spawn_blocking(|| {
+                dark_light::detect() != dark_light::Mode::Dark
+            }).await.unwrap_or(*is_light.read());
+            if light != *is_light.read() {
+                is_light.set(light);
+            }
+        }
+    });
 
     // Asset handler for local images (thumbnails)
     use_asset_handler("localimg", |request, responder: RequestAsyncResponder| {
@@ -1332,6 +1406,23 @@ fn App() -> Element {
 
     rsx! {
         document::Link { rel: "stylesheet", href: MAIN_CSS }
+
+        // Floating theme toggle, top-right. Same UX as ais-runner.
+        button {
+            class: "btn-theme",
+            title: if *is_light.read() { "Switch to dark mode" } else { "Switch to light mode" },
+            onclick: move |_| {
+                let next = !*is_light.read();
+                theme_overridden.set(true);
+                is_light.set(next);
+                document::eval(&format!(
+                    "document.body.className = '{}';",
+                    if next { "light" } else { "" }
+                ));
+            },
+            if *is_light.read() { "🌙" } else { "☀" }
+        }
+
         if project_dir.read().is_none() {
             ProjectPicker {
                 on_open: move |dir: PathBuf| {
