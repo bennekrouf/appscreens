@@ -297,7 +297,7 @@ jobs:
       - name: Bundle
         run: dx bundle --platform desktop --release --package-types msi
 
-      - name: Collect artifacts
+      - name: Collect unsigned .msi
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path dist -Force | Out-Null
@@ -308,8 +308,47 @@ jobs:
           Copy-Item $msi.FullName dist\appscreens-windows-setup.msi
           Get-ChildItem dist
 
-          # Materialize the file list BEFORE opening the sums file,
-          # and exclude the sums file itself so it can't hash itself.
+      # ── SignPath Foundation: code-sign the .msi for free (OSS only) ────────
+      # Uncomment when SignPath Foundation has approved the project and the
+      # required secret/inputs are configured. Until then the .msi ships
+      # unsigned (SmartScreen will warn on download).
+      #
+      # Setup (one-time, after SignPath approval):
+      #   1. Add repo secret `SIGNPATH_API_TOKEN`            (from SignPath dashboard).
+      #   2. Replace the three placeholders below with values from your
+      #      SignPath project page:
+      #        - organization-id           (UUID)
+      #        - project-slug              (e.g. "appscreens")
+      #        - signing-policy-slug       (e.g. "release-signing")
+      #
+      # - name: Upload unsigned artifact to GitHub
+      #   id: upload-unsigned
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: appscreens-windows-unsigned
+      #     path: dist/appscreens-windows-setup.msi
+      #
+      # - name: Submit signing request to SignPath
+      #   uses: signpath/github-action-submit-signing-request@v1
+      #   with:
+      #     api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+      #     organization-id: 'REPLACE-WITH-SIGNPATH-ORG-UUID'
+      #     project-slug:    'REPLACE-WITH-SIGNPATH-PROJECT-SLUG'
+      #     signing-policy-slug: 'REPLACE-WITH-SIGNPATH-POLICY-SLUG'
+      #     github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
+      #     wait-for-completion: true
+      #     output-artifact-directory: dist-signed
+      #
+      # - name: Replace .msi with the signed version
+      #   shell: pwsh
+      #   run: |
+      #     Move-Item -Force dist-signed\appscreens-windows-setup.msi dist\appscreens-windows-setup.msi
+      #     Write-Host "Signed .msi in place."
+
+      # ── Compute SHA-256 AFTER signing so the hash matches what users get ───
+      - name: Hash artifacts
+        shell: pwsh
+        run: |
           $files = Get-ChildItem dist -File |
             Where-Object { $_.Name -ne 'SHA256SUMS-windows.txt' }
           $lines = foreach ($f in $files) {

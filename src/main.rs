@@ -9,6 +9,10 @@ use imageproc::drawing::{draw_text_mut, text_size};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+mod update_check;
+#[cfg(target_os = "android")]
+mod android_saf;
+
 const MAIN_CSS: Asset = asset!("/assets/main.css");
 const ROBOTO_FONT: &[u8] = include_bytes!("../assets/Roboto-Bold.ttf");
 
@@ -1328,6 +1332,19 @@ fn is_screens_shape(x: u32, y: u32, size: u32) -> bool {
 // ---------------------------------------------------------------------------
 // Root App
 // ---------------------------------------------------------------------------
+// dark-light has no Android backend (see Cargo.toml) — there's no per-app
+// system light/dark signal to read there the way desktop OSes expose one, so
+// this just keeps the app on its existing light-by-default behavior (the
+// desktop check below also treats "can't tell" as light, via `!= Dark`).
+#[cfg(not(target_os = "android"))]
+fn system_prefers_light() -> bool {
+    dark_light::detect() != dark_light::Mode::Dark
+}
+#[cfg(target_os = "android")]
+fn system_prefers_light() -> bool {
+    true
+}
+
 #[component]
 fn App() -> Element {
     // Global settings
@@ -1340,8 +1357,7 @@ fn App() -> Element {
     // ── Theme (matches ais-runner) ────────────────────────────────────────
     // Initialise from system, then keep in sync — but stop syncing once the
     // user manually toggles via the button.
-    let system_light = dark_light::detect() != dark_light::Mode::Dark;
-    let mut is_light          = use_signal(|| system_light);
+    let mut is_light          = use_signal(system_prefers_light);
     let mut theme_overridden  = use_signal(|| false);
 
     use_effect(move || {
@@ -1353,12 +1369,26 @@ fn App() -> Element {
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
             if *theme_overridden.read() { continue; }
-            let light = tokio::task::spawn_blocking(|| {
-                dark_light::detect() != dark_light::Mode::Dark
-            }).await.unwrap_or(*is_light.read());
+            let light = tokio::task::spawn_blocking(system_prefers_light)
+                .await
+                .unwrap_or(*is_light.read());
             if light != *is_light.read() {
                 is_light.set(light);
             }
+        }
+    });
+
+    // ── Auto-update check ──────────────────────────────────────────────────
+    // Background fetch latest.json from GitHub releases on startup; if a newer
+    // version is published, surface a small banner. Dismissable per session.
+    let mut update_info       = use_signal(|| Option::<update_check::UpdateInfo>::None);
+    let mut update_dismissed  = use_signal(|| false);
+
+    use_coroutine(move |_rx: dioxus::prelude::UnboundedReceiver<()>| async move {
+        // Small delay so we don't compete with the app's own boot work.
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        if let Some(info) = update_check::check().await {
+            update_info.set(Some(info));
         }
     });
 
@@ -1407,6 +1437,31 @@ fn App() -> Element {
     rsx! {
         document::Link { rel: "stylesheet", href: MAIN_CSS }
 
+        // ── Update banner ──────────────────────────────────────────────────
+        // Renders only when a newer release exists AND the user hasn't dismissed
+        // it this session. Click "Download" to open the GitHub releases page in
+        // the system browser (Dioxus opens external links via the OS handler).
+        if let (Some(info), false) = (update_info.read().clone(), *update_dismissed.read()) {
+            div { class: "update-banner",
+                span { class: "update-banner-text",
+                    "AppScreens "
+                    strong { "{info.latest_version}" }
+                    " is available (you have {env!(\"CARGO_PKG_VERSION\")})."
+                }
+                a {
+                    class: "update-banner-link",
+                    href: "{info.release_url}",
+                    target: "_blank",
+                    "Download"
+                }
+                button {
+                    class: "update-banner-dismiss",
+                    onclick: move |_| update_dismissed.set(true),
+                    "×"
+                }
+            }
+        }
+
         // Floating theme toggle, top-right. Same UX as ais-runner.
         button {
             class: "btn-theme",
@@ -1445,6 +1500,75 @@ fn App() -> Element {
     }
 }
 
+// Android has no folder-browse equivalent (see src/android_saf.rs) — every
+// project the user could open was created through this same picker, on the
+// one fixed app-private root, so it's already in Recent Projects. Nothing
+// external to browse to, so this renders nothing there.
+//
+// (`#[cfg]` doesn't parse directly on an rsx! element, hence pulling this out
+// into its own function rather than cfg'ing the `button {}` in place.)
+#[cfg(not(target_os = "android"))]
+fn open_existing_button(on_open: EventHandler<PathBuf>) -> Element {
+    rsx! {
+        button {
+            class: "btn picker-open-btn",
+            onclick: move |_| {
+                spawn(async move {
+                    if let Some(folder) = rfd::AsyncFileDialog::new()
+                        .set_title("Open existing project folder")
+                        .pick_folder()
+                        .await
+                    {
+                        on_open.call(folder.path().to_path_buf());
+                    }
+                });
+            },
+            "📂  Open Existing…"
+        }
+    }
+}
+#[cfg(target_os = "android")]
+fn open_existing_button(_on_open: EventHandler<PathBuf>) -> Element {
+    rsx! {}
+}
+
+// Meaningless on Android, where new_parent is always already Some (see its
+// #[cfg]'d initializer in ProjectPicker).
+#[cfg(not(target_os = "android"))]
+fn parent_folder_field(mut new_parent: Signal<Option<PathBuf>>) -> Element {
+    rsx! {
+        div { class: "build-config-field",
+            label { class: "build-config-label", "Location" }
+            div { class: "folder-pick-row",
+                button {
+                    class: "btn",
+                    onclick: move |_| {
+                        spawn(async move {
+                            if let Some(folder) = rfd::AsyncFileDialog::new()
+                                .set_title("Choose parent folder for new project")
+                                .pick_folder()
+                                .await
+                            {
+                                new_parent.set(Some(folder.path().to_path_buf()));
+                            }
+                        });
+                    },
+                    "Choose Folder…"
+                }
+                if let Some(p) = new_parent.read().clone() {
+                    span { class: "folder-pick-path", "{p.to_string_lossy()}" }
+                } else {
+                    span { class: "folder-pick-hint", "No folder selected" }
+                }
+            }
+        }
+    }
+}
+#[cfg(target_os = "android")]
+fn parent_folder_field(_new_parent: Signal<Option<PathBuf>>) -> Element {
+    rsx! {}
+}
+
 // ---------------------------------------------------------------------------
 // Project Picker (shown on launch)
 // ---------------------------------------------------------------------------
@@ -1458,7 +1582,14 @@ fn ProjectPicker(on_open: EventHandler<PathBuf>) -> Element {
     let mut new_slug     = use_signal(|| String::new());
     let mut new_bundle   = use_signal(|| String::new());
     let mut new_platform = use_signal(|| PlatformType::IosAndroid);
-    let mut new_parent   = use_signal(|| Option::<PathBuf>::None);
+    // Desktop: nothing until the user picks a folder. Android: there's no
+    // per-project folder choice at all (see src/android_saf.rs) — every
+    // project lives under one fixed, app-private root, so this is never
+    // empty and the "Location" field below doesn't render.
+    #[cfg(not(target_os = "android"))]
+    let mut new_parent = use_signal(|| Option::<PathBuf>::None);
+    #[cfg(target_os = "android")]
+    let mut new_parent = use_signal(|| Some(android_saf::app_private_projects_root()));
     let mut create_error = use_signal(|| Option::<String>::None);
 
     // Derive slug and bundle from name automatically (user can override)
@@ -1490,21 +1621,7 @@ fn ProjectPicker(on_open: EventHandler<PathBuf>) -> Element {
                         },
                         if *show_new.read() { "✕  Cancel" } else { "✦  New Project…" }
                     }
-                    button {
-                        class: "btn picker-open-btn",
-                        onclick: move |_| {
-                            spawn(async move {
-                                if let Some(folder) = rfd::AsyncFileDialog::new()
-                                    .set_title("Open existing project folder")
-                                    .pick_folder()
-                                    .await
-                                {
-                                    on_open.call(folder.path().to_path_buf());
-                                }
-                            });
-                        },
-                        "📂  Open Existing…"
-                    }
+                    {open_existing_button(on_open.clone())}
                 }
 
                 // ── New Project wizard (inline) ──────────────────────────────
@@ -1575,32 +1692,7 @@ fn ProjectPicker(on_open: EventHandler<PathBuf>) -> Element {
                             }
                         }
 
-                        // Parent folder picker
-                        div { class: "build-config-field",
-                            label { class: "build-config-label", "Location" }
-                            div { class: "folder-pick-row",
-                                button {
-                                    class: "btn",
-                                    onclick: move |_| {
-                                        spawn(async move {
-                                            if let Some(folder) = rfd::AsyncFileDialog::new()
-                                                .set_title("Choose parent folder for new project")
-                                                .pick_folder()
-                                                .await
-                                            {
-                                                new_parent.set(Some(folder.path().to_path_buf()));
-                                            }
-                                        });
-                                    },
-                                    "Choose Folder…"
-                                }
-                                if let Some(p) = new_parent.read().clone() {
-                                    span { class: "folder-pick-path", "{p.to_string_lossy()}" }
-                                } else {
-                                    span { class: "folder-pick-hint", "No folder selected" }
-                                }
-                            }
-                        }
+                        {parent_folder_field(new_parent)}
 
                         // Error banner
                         if let Some(err) = create_error.read().clone() {
@@ -1772,6 +1864,7 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
     };
 
     // ---- Logo picker ----
+    #[cfg(not(target_os = "android"))]
     let pick_logo = move |_| {
         let proj_dir = proj_dir3.clone();
         spawn(async move {
@@ -1798,6 +1891,25 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                 let mut p = proj.write();
                 p.logo_path = Some(logo_path);
                 save_project_state(&proj_dir, &p);
+            }
+        });
+    };
+    // rfd has no Android backend (see src/android_saf.rs) — the picker there
+    // hands back bytes directly rather than a path, so this copies from bytes
+    // instead of from a source file, but lands in the same place.
+    #[cfg(target_os = "android")]
+    let pick_logo = move |_| {
+        let proj_dir = proj_dir3.clone();
+        spawn(async move {
+            if let Some((fname, bytes)) = android_saf::pick_images(false).await.into_iter().next() {
+                let assets_dir = proj_dir.join("assets");
+                let _ = tokio::fs::create_dir_all(&assets_dir).await;
+                let dest = assets_dir.join(&fname);
+                if tokio::fs::write(&dest, &bytes).await.is_ok() {
+                    let mut p = proj.write();
+                    p.logo_path = Some(dest);
+                    save_project_state(&proj_dir, &p);
+                }
             }
         });
     };
@@ -2362,6 +2474,7 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
     };
 
     // ---- File picker — adds images to the currently active locale tab ----
+    #[cfg(not(target_os = "android"))]
     let pick_files = move |_| {
         let proj_dir = proj_dir.clone();
         let locale_for_pick = active_locale_tab.read().clone();
@@ -2385,6 +2498,44 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                 p.ensure_texts_len(&locale_for_pick, n);
                 save_project_state(&proj_dir, &p);
             }
+        });
+    };
+    // Android has no stable path to reference back to (a content:// URI isn't
+    // guaranteed to survive past this session), so each picked image is
+    // copied into the project instead of referenced in place — unlike
+    // desktop's pick_files above, which keeps pointing at the original file.
+    #[cfg(target_os = "android")]
+    let pick_files = move |_| {
+        let proj_dir = proj_dir.clone();
+        let locale_for_pick = active_locale_tab.read().clone();
+        spawn(async move {
+            let picked = android_saf::pick_images(true).await;
+            if picked.is_empty() {
+                return;
+            }
+            let sources_dir = proj_dir.join("sources").join(&locale_for_pick);
+            let _ = tokio::fs::create_dir_all(&sources_dir).await;
+
+            let mut written = Vec::new();
+            for (fname, bytes) in picked {
+                let dest = sources_dir.join(&fname);
+                if tokio::fs::write(&dest, &bytes).await.is_ok() {
+                    written.push(dest);
+                }
+            }
+
+            let mut p = proj.write();
+            let srcs = p.locale_sources
+                .entry(locale_for_pick.clone())
+                .or_insert_with(Vec::new);
+            for dest in written {
+                if !srcs.contains(&dest) {
+                    srcs.push(dest);
+                }
+            }
+            let n = p.locale_sources[&locale_for_pick].len();
+            p.ensure_texts_len(&locale_for_pick, n);
+            save_project_state(&proj_dir, &p);
         });
     };
 
@@ -3832,6 +3983,34 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
     }
 }
 
+// iOS-only (fastlane/Xcode signing — meaningless on an Android build
+// regardless of file access), and rfd has no Android backend to fall back to.
+#[cfg(not(target_os = "android"))]
+fn provisioning_profile_browse_button(mut settings: Signal<Settings>) -> Element {
+    rsx! {
+        button {
+            class: "btn settings-browse-btn",
+            onclick: move |_| {
+                spawn(async move {
+                    if let Some(f) = rfd::AsyncFileDialog::new()
+                        .set_title("Select Provisioning Profile")
+                        .add_filter("Provisioning Profile", &["mobileprovision"])
+                        .pick_file().await
+                    {
+                        settings.write().provisioning_profile = f.path().to_string_lossy().to_string();
+                        save_settings(&settings());
+                    }
+                });
+            },
+            "Browse…"
+        }
+    }
+}
+#[cfg(target_os = "android")]
+fn provisioning_profile_browse_button(_settings: Signal<Settings>) -> Element {
+    rsx! {}
+}
+
 // ---------------------------------------------------------------------------
 // Settings popup (gear)
 // ---------------------------------------------------------------------------
@@ -4030,22 +4209,7 @@ fn SettingsPopup(on_close: EventHandler<()>) -> Element {
                                 save_settings(&settings());
                             },
                         }
-                        button {
-                            class: "btn settings-browse-btn",
-                            onclick: move |_| {
-                                spawn(async move {
-                                    if let Some(f) = rfd::AsyncFileDialog::new()
-                                        .set_title("Select Provisioning Profile")
-                                        .add_filter("Provisioning Profile", &["mobileprovision"])
-                                        .pick_file().await
-                                    {
-                                        settings.write().provisioning_profile = f.path().to_string_lossy().to_string();
-                                        save_settings(&settings());
-                                    }
-                                });
-                            },
-                            "Browse…"
-                        }
+                        {provisioning_profile_browse_button(settings)}
                     }
                     p { class: "settings-hint", "No profiles found in ~/Library/MobileDevice/Provisioning Profiles" }
                 } else {

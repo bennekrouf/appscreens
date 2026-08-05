@@ -1,6 +1,11 @@
 [application]
 name = "AppScreens"
 default_platform = "desktop"
+# Subclasses WryActivity to override onActivityResult — needed so the
+# Storage Access Framework picker (src/android_saf.rs) can receive the
+# result of an Intent.ACTION_OPEN_DOCUMENT launch. Path is relative to the
+# crate root; the file is copied in as-is (not templated).
+android_main_activity = "android/MainActivity.kt"
 
 [bundle]
 identifier = "com.mayorana.appscreens"
