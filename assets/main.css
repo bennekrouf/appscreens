@@ -1,47 +1,98 @@
 /* ══════════════════════════════════════════════
    CSS VARIABLES — dark (default) / light
-   (lifted from ais-runner for visual parity)
+
+   Mood: cool indigo. AppScreens exists to show an app at its best in the
+   store, so the chrome stays quiet and lets the generated screenshots carry
+   the colour. The accents are the two stops of the app icon's own gradient —
+   #0078D4 blue for anything that builds or confirms, #783CC0 violet for
+   anything that publishes outward. Structure is shared with ais-runner and
+   ais-tracing; only these values differ between the three apps.
+
+   Every colour in this file is a token. A literal hex below this block is a
+   bug: it will not flip with the theme, which is how the error card and the
+   Android buttons ended up as near-black boxes on the cream light theme.
 ══════════════════════════════════════════════ */
 :root {
-    --bg0:        #0d1117;
-    --bg1:        #161b22;
-    --bg2:        #21262d;
-    --bg3:        #1c2128;
-    --border:     #30363d;
-    --border2:    #21262d;
-    --text1:      #c9d1d9;
-    --text2:      #8b949e;
-    --text3:      #6e7681;
-    --green:      #3fb950;
-    --green-bg:   #238636;
-    --red:        #f85149;
-    --red-bg:     #da3633;
-    --blue:       #58a6ff;
-    --blue-bg:    #1f6feb;
-    --blue-dark:  #1f3a5f;
-    --yellow:     #d29922;
-    --orange:     #e07b39;
+    --bg0:            #0b0e16;
+    --bg1:            #131826;
+    --bg2:            #1d2435;
+    --bg3:            #171d2c;
+    --border:         #2b3450;
+    --border2:        #1d2435;
+    --text1:          #e7ecf7;
+    --text2:          #98a4bf;
+    --text3:          #6c7794;
+
+    --blue:           #5aa7ff;
+    --blue-bg:        #0078d4;
+    --blue-hover:     #1b8ceb;
+    --blue-dark:      #15294a;
+
+    --violet:         #b394fb;
+    --violet-bg:      #783cc0;
+    --violet-hover:   #8b4ad6;
+
+    --green:          #56d97f;
+    --green-bg:       #1f9d4d;
+
+    --red:            #ff7b7b;
+    --red-bg:         #d24141;
+    --red-dark:       #2b1618;
+
+    --yellow:         #ecb44a;
+    --orange:         #ef8f47;
+
+    /* Android buttons keep a green identity in both themes — the hue is the
+       platform's, so it does not follow --green (which goes olive in light
+       mode and turns the still-green button muddy). */
+    --android-bg:     #14381f;
+    --android-border: #2f7d4a;
+    --android-text:   #86efac;
+    --android-hover:  #1c5130;
+
+    /* Log consoles stay darker than their surrounding card in both themes. */
+    --surface-log:    #070a11;
+    /* Text on a filled accent button — fixed, because the accent behind it is. */
+    --on-accent:      #ffffff;
 }
 
 body.light {
-    --bg0:        #fdf6e3;
-    --bg1:        #eee8d5;
-    --bg2:        #e5dfcc;
-    --bg3:        #dcd6c3;
-    --border:     #d5cebc;
-    --border2:    #e0d9c6;
-    --text1:      #586e75;
-    --text2:      #657b83;
-    --text3:      #93a1a1;
-    --green:      #859900;
-    --green-bg:   #738500;
-    --red:        #dc322f;
-    --red-bg:     #c62d2a;
-    --blue:       #268bd2;
-    --blue-bg:    #2179b8;
-    --blue-dark:  #e0eaf0;
-    --yellow:     #b58900;
-    --orange:     #cb4b16;
+    --bg0:            #f6f8fc;
+    --bg1:            #ffffff;
+    --bg2:            #eaeff7;
+    --bg3:            #dfe6f1;
+    --border:         #cfd8e6;
+    --border2:        #eaeff7;
+    --text1:          #172032;
+    --text2:          #53607a;
+    --text3:          #7d8899;
+
+    --blue:           #0063b1;
+    --blue-bg:        #0078d4;
+    --blue-hover:     #0088ee;
+    --blue-dark:      #dceafa;
+
+    --violet:         #6b2fb0;
+    --violet-bg:      #783cc0;
+    --violet-hover:   #8a4ad2;
+
+    --green:          #157f3f;
+    --green-bg:       #1f9d4d;
+
+    --red:            #c33a3a;
+    --red-bg:         #d24141;
+    --red-dark:       #fbe4e4;
+
+    --yellow:         #9a6a10;
+    --orange:         #c2560c;
+
+    --android-bg:     #dff5e6;
+    --android-border: #7cc79a;
+    --android-text:   #14632f;
+    --android-hover:  #c6ebd3;
+
+    --surface-log:    #f0f4fa;
+    --on-accent:      #ffffff;
 }
 
 * { box-sizing: border-box; }
@@ -97,7 +148,7 @@ body {
     right: 0;
     z-index: 999;
     background: var(--blue-bg);
-    color: #fff;
+    color: var(--on-accent);
     padding: 8px 16px;
     display: flex;
     align-items: center;
@@ -108,7 +159,7 @@ body {
 .update-banner-text { flex: 1; }
 .update-banner-text strong { font-weight: 700; }
 .update-banner-link {
-    color: #fff;
+    color: var(--on-accent);
     text-decoration: underline;
     font-weight: 600;
     padding: 4px 10px;
@@ -120,7 +171,7 @@ body {
 .update-banner-dismiss {
     background: transparent;
     border: none;
-    color: #fff;
+    color: var(--on-accent);
     font-size: 20px;
     line-height: 1;
     cursor: pointer;
@@ -273,7 +324,7 @@ body {
 .folder-pick-path {
     font-family: 'SF Mono', Monaco, monospace;
     font-size: 0.78rem;
-    color: #6ee7b7;
+    color: var(--green);
     word-break: break-all;
 }
 
@@ -426,9 +477,9 @@ h2 {
     /* Fixed, not var(--text1) — --blue-bg stays a solid mid-tone blue in
        both themes, but --text1 flips dark/light with the theme, which on
        light mode put dark slate-grey text on a still-blue button. */
-    color: #fff;
+    color: var(--on-accent);
 }
-.btn-primary:hover { background: #2563eb; }
+.btn-primary:hover { background: var(--blue-hover); }
 /* Dim rather than recolor — matches every other disabled button below
    (.btn:disabled, .btn-build:disabled, .btn-publish:disabled). The custom
    background/color this replaced used --blue-dark, which inverts brightness
@@ -502,7 +553,7 @@ h2 {
     display: inline-block;
     width: 14px;
     height: 14px;
-    border: 2px solid rgba(255,255,255,0.3);
+    border: 2px solid var(--border);
     border-top-color: var(--text1);
     border-radius: 50%;
     animation: spin 0.7s linear infinite;
@@ -510,8 +561,8 @@ h2 {
 }
 
 .spinner-dark {
-    border-color: rgba(200,200,200,0.3);
-    border-top-color: #ccc;
+    border-color: var(--border);
+    border-top-color: var(--text2);
 }
 
 /* ------------------------------------------------------------------ */
@@ -565,7 +616,7 @@ h2 {
     border-radius: 6px;
     border: 1px solid var(--bg2);
     flex-shrink: 0;
-    background: #13151b;
+    background: var(--bg0);
 }
 
 .source-item-right {
@@ -679,15 +730,15 @@ h2 {
 }
 
 .hex-input:focus {
-    border-color: #4f8ef7;
+    border-color: var(--blue);
 }
 
 /* ------------------------------------------------------------------ */
 /* Error card                                                           */
 /* ------------------------------------------------------------------ */
 .error-card {
-    border-color: #5a2a2a;
-    background: #1a1215;
+    border-color: var(--red-bg);
+    background: var(--red-dark);
 }
 .error-card p {
     color: var(--red);
@@ -707,7 +758,7 @@ h2 {
 
 .output-tab {
     background: transparent;
-    color: #666;
+    color: var(--text3);
     border: none;
     padding: 12px 18px;
     font-size: 0.84rem;
@@ -719,7 +770,7 @@ h2 {
     border-bottom: 2px solid transparent;
     margin-bottom: -1px;
 }
-.output-tab:hover { color: #aaa; }
+.output-tab:hover { color: var(--text2); }
 .output-tab.active { color: var(--blue-bg); border-bottom-color: var(--blue-bg); }
 
 .tab-badge {
@@ -730,7 +781,7 @@ h2 {
     padding: 1px 6px;
     font-weight: 600;
 }
-.output-tab.active .tab-badge { background: #1d3a6e; color: var(--blue); }
+.output-tab.active .tab-badge { background: var(--blue-dark); color: var(--blue); }
 
 .output-content {
     padding: 16px 20px;
@@ -750,7 +801,7 @@ h2 {
 /* Progress log */
 .log-scroll { display: flex; flex-direction: column; gap: 2px; }
 .log-line {
-    color: #6ee7b7;
+    color: var(--green);
     font-family: 'SF Mono', Monaco, monospace;
     font-size: 0.78rem;
     margin: 0;
@@ -1076,9 +1127,9 @@ h2 {
 /* ------------------------------------------------------------------ */
 .output-tab-publish {
     margin-left: auto; /* push to the right */
-    color: #a78bfa;
+    color: var(--violet);
 }
-.output-tab-publish.active { color: #7c3aed; border-bottom-color: #7c3aed; }
+.output-tab-publish.active { color: var(--violet); border-bottom-color: var(--violet); font-weight: 600; }
 
 .publish-panel {
     display: flex;
@@ -1106,7 +1157,7 @@ h2 {
     border-radius: 4px;
     padding: 1px 5px;
     font-size: 0.76rem;
-    color: #a78bfa;
+    color: var(--violet);
     font-family: 'SF Mono', Monaco, monospace;
 }
 
@@ -1120,15 +1171,15 @@ h2 {
     font-size: 0.82rem;
     font-weight: 500;
 }
-.publish-idle   { color: var(--border); }
+.publish-idle   { color: var(--text3); }
 .publish-running { color: var(--blue); }
 .publish-success { color: var(--green); }
 .publish-error   { color: var(--red); }
 
 .btn-publish {
-    background: #4c1d95;
-    border: 1px solid #6d28d9;
-    color: #e9d5ff;
+    background: var(--violet-bg);
+    border: 1px solid var(--violet-bg);
+    color: var(--on-accent);
     border-radius: 10px;
     padding: 12px 22px;
     font-size: 0.95rem;
@@ -1140,12 +1191,12 @@ h2 {
     transition: background 0.15s, border-color 0.15s;
     width: 100%;
 }
-.btn-publish:hover { background: #5b21b6; border-color: #7c3aed; }
+.btn-publish:hover { background: var(--violet-hover); border-color: var(--violet-hover); }
 .btn-publish:disabled { opacity: 0.45; cursor: not-allowed; }
 
 .publish-log { display: flex; flex-direction: column; gap: 6px; }
 .publish-log-label {
-    color: var(--border);
+    color: var(--text3);
     font-size: 0.72rem;
     text-transform: uppercase;
     letter-spacing: 0.05em;
@@ -1153,7 +1204,7 @@ h2 {
 }
 .publish-log-scroll {
     max-height: 160px;
-    background: #0d0f14;
+    background: var(--surface-log);
     border: 1px solid var(--bg1);
     border-radius: 6px;
     padding: 8px 10px;
@@ -1161,7 +1212,7 @@ h2 {
 }
 
 .log-error   { color: var(--red) !important; }
-.log-warn    { color: #fbbf24 !important; }
+.log-warn    { color: var(--yellow) !important; }
 .log-success { color: var(--green) !important; }
 
 /* ------------------------------------------------------------------ */
@@ -1234,7 +1285,7 @@ h2 {
 /* ------------------------------------------------------------------ */
 /* Build tab                                                            */
 /* ------------------------------------------------------------------ */
-.output-tab-build { color: #fb923c; }
+.output-tab-build { color: var(--orange); }
 .output-tab-build.active { color: var(--orange); border-bottom-color: var(--orange); }
 
 .build-panel {
@@ -1304,25 +1355,24 @@ h2 {
        read with; both flip together. */
     color: var(--blue);
 }
-.btn-build-ios:hover { background: #1d4ed8; border-color: var(--blue); color: #fff; }
+.btn-build-ios:hover { background: var(--blue-hover); border-color: var(--blue-hover); color: var(--on-accent); }
 
 .btn-build-android {
-    background: #14532d;
-    border-color: #16a34a;
-    /* Fixed light green rather than var(--green) — this button's
-       background is a deliberately fixed "Android green" brand colour that
-       doesn't follow the theme, so its text can't either; var(--green)
-       turns olive in light mode, muddy against the still-dark-green bg. */
-    color: #86efac;
+    background: var(--android-bg);
+    border-color: var(--android-border);
+    /* --android-* rather than --green: the hue is the platform's, not the
+       theme's, so it stays green in both — but the pair still flips, which
+       the old fixed dark-green-on-cream version could not. */
+    color: var(--android-text);
 }
-.btn-build-android:hover { background: #15803d; border-color: #4ade80; color: #fff; }
+.btn-build-android:hover { background: var(--android-hover); border-color: var(--android-border); color: var(--android-text); }
 
 .btn-build-android-secondary {
-    background: #1a2a1e;
-    border-color: #2a4a32;
-    color: #6ee7a0;
+    background: var(--bg2);
+    border-color: var(--android-border);
+    color: var(--android-text);
 }
-.btn-build-android-secondary:hover { background: #14532d; border-color: #16a34a; color: #86efac; }
+.btn-build-android-secondary:hover { background: var(--android-bg); border-color: var(--android-border); color: var(--android-text); }
 
 .build-log-scroll { max-height: 220px; }
 
@@ -1511,7 +1561,7 @@ h2 {
 }
 
 .lang-tab-images-hint {
-    color: #3d4250;
+    color: var(--text3);
     font-size: 0.7rem;
     margin: 0;
     white-space: nowrap;

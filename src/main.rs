@@ -13,7 +13,12 @@ mod update_check;
 #[cfg(target_os = "android")]
 mod android_saf;
 
-const MAIN_CSS: Asset = asset!("/assets/main.css");
+// Embedded rather than shipped as a manganis asset: the bundled `.app` /
+// `.msi` / `.deb` only carry `assets/` if the packaging step copies them in,
+// and when it silently does not (as in the v0.1.2 dmg) the webview 404s the
+// stylesheet and renders raw unstyled DOM. Baking it into the binary — like
+// ROBOTO_FONT and the window icon — makes that failure mode impossible.
+const MAIN_CSS: &str = include_str!("../assets/main.css");
 const ROBOTO_FONT: &[u8] = include_bytes!("../assets/Roboto-Bold.ttf");
 
 // ---------------------------------------------------------------------------
@@ -1255,15 +1260,19 @@ enum AndroidPublishPhase {
 fn main() {
     tracing_subscriber::fmt::init();
 
-    let config = dioxus::desktop::Config::new().with_window(
-        WindowBuilder::new()
-            .with_title("AppScreens")
-            .with_window_icon(make_icon())
-            .with_inner_size(LogicalSize::new(1020.0, 860.0))
-            .with_focused(true)
-            .with_decorations(true)
-            .with_transparent(false),
-    );
+    let config = dioxus::desktop::Config::new()
+        // Injected into index.html's <head> before first paint, so there is no
+        // flash of unstyled content and no runtime asset lookup.
+        .with_custom_head(format!("<style>{MAIN_CSS}</style>"))
+        .with_window(
+            WindowBuilder::new()
+                .with_title("AppScreens")
+                .with_window_icon(make_icon())
+                .with_inner_size(LogicalSize::new(1020.0, 860.0))
+                .with_focused(true)
+                .with_decorations(true)
+                .with_transparent(false),
+        );
 
     LaunchBuilder::desktop().with_cfg(config).launch(App);
 }
@@ -1435,8 +1444,6 @@ fn App() -> Element {
     });
 
     rsx! {
-        document::Link { rel: "stylesheet", href: MAIN_CSS }
-
         // ── Update banner ──────────────────────────────────────────────────
         // Renders only when a newer release exists AND the user hasn't dismissed
         // it this session. Click "Download" to open the GitHub releases page in

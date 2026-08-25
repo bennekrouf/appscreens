@@ -156,11 +156,31 @@ jobs:
       - name: Bundle .app
         run: dx bundle --platform desktop --release --package-types macos
 
+      # `dx bundle` leaves two .app trees in target/: the one it assembles
+      # itself (release/macos/) and the one cargo-bundle re-packages with the
+      # generated .icns and PkgInfo (bundle/macos/macos/). Only the latter is a
+      # complete app, and `find | head -1` picked between them by directory
+      # order — which is how the v0.1.2 dmg shipped without Resources/assets and
+      # rendered unstyled. Select the packaged one explicitly instead.
+      - name: Locate packaged .app
+        run: |
+          set -euo pipefail
+          APP=$(find target/dx -type d -name "*.app" -path "*/bundle/macos/*" | head -1)
+          if [ -z "$APP" ]; then
+            echo "::error::No packaged .app produced by dx bundle"
+            find target/dx -type d -name "*.app" || true
+            exit 1
+          fi
+          if [ ! -f "$APP/Contents/Info.plist" ] || [ ! -d "$APP/Contents/MacOS" ]; then
+            echo "::error::$APP is not a complete app bundle"
+            exit 1
+          fi
+          echo "Selected: $APP"
+          echo "APP=$APP" >> "$GITHUB_ENV"
+
       - name: Codesign .app
         run: |
           set -euo pipefail
-          APP=$(find target -type d -name "*.app" | head -1)
-          if [ -z "$APP" ]; then echo "::error::No .app produced by dx bundle"; exit 1; fi
           echo "Signing: $APP"
           # Sign nested binaries first, then the bundle itself
           codesign --force --options runtime --timestamp \
@@ -173,7 +193,6 @@ jobs:
       - name: Create signed DMG
         run: |
           set -euo pipefail
-          APP=$(find target -type d -name "*.app" | head -1)
           mkdir -p dist dmg-staging
           cp -R "$APP" dmg-staging/
           ln -s /Applications dmg-staging/Applications
