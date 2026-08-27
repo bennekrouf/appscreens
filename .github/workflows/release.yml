@@ -405,7 +405,7 @@ jobs:
       - name: Generate latest.json
         env:
           REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ needs.prepare.outputs.tag || github.ref_name }}
         run: |
           VER="${TAG#v}"
           BASE="https://github.com/$REPO/releases/download/$TAG"
@@ -443,7 +443,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${{ github.ref_name }}"
+          TAG="${{ needs.prepare.outputs.tag || github.ref_name }}"
           FILES=$(find release -type f | tr '\n' ' ')
 
           gh release create "$TAG" \
