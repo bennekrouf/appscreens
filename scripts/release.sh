@@ -67,7 +67,10 @@ fi
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  Release plan"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  Cargo.toml : $CURRENT → $NEW"
+echo "  Cargo.toml : $CARGO_VERSION → $NEW"
+if [[ "$CARGO_VERSION" != "$CURRENT" ]]; then
+    echo "  drift        : Cargo.toml was behind tag v$CURRENT — bumping from the tag"
+fi
 echo "  Git tag    : $TAG"
 echo "  Branch     : $(git branch --show-current)"
 echo ""
@@ -85,17 +88,33 @@ echo ""
 
 $DRY_RUN && { echo "Dry run — nothing done."; exit 0; }
 
-read -r -p "Proceed? [y/N] " CONFIRM
-[[ "$CONFIRM" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
+if [[ -t 0 ]]; then
+    read -r -p "Proceed? [y/N] " CONFIRM
+    [[ "$CONFIRM" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
+else
+    echo "No TTY on stdin — proceeding without confirmation."
+fi
 
 # ── Bump + commit + tag ───────────────────────────────────────────────────────
 if [[ "$OSTYPE" == "darwin"* ]]; then
-    sed -i '' "s/^version = \"$CURRENT\"/version = \"$NEW\"/" "$CARGO"
+    sed -i '' "s/^version = \"$CARGO_VERSION\"/version = \"$NEW\"/" "$CARGO"
 else
-    sed -i    "s/^version = \"$CURRENT\"/version = \"$NEW\"/" "$CARGO"
+    sed -i    "s/^version = \"$CARGO_VERSION\"/version = \"$NEW\"/" "$CARGO"
 fi
 
-git add "$CARGO"
+# A tag whose commit does not carry the bump is how this repo ended up with
+# releases pointing at a stale version. Fail loudly instead.
+if ! grep -q "^version = \"$NEW\"" "$CARGO"; then
+    echo "❌ Failed to bump Cargo.toml version ($CARGO_VERSION → $NEW) — aborting before commit/tag."
+    exit 1
+fi
+
+# Refresh Cargo.lock so its recorded version matches the bump, and commit it
+# with the manifest — otherwise CI's `cargo test --locked` fails on master
+# for every release.
+cargo metadata --format-version 1 --quiet >/dev/null
+
+git add "$CARGO" Cargo.lock
 git commit -m "chore: release $TAG"
 git tag "$TAG"
 
