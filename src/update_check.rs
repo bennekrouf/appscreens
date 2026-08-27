@@ -13,10 +13,13 @@ use serde::Deserialize;
 
 /// Stable URL — points at whatever the latest GitHub release is, regardless
 /// of version number. Updated automatically every release.
-const LATEST_URL: &str =
-    "https://github.com/bennekrouf/appscreens/releases/latest/download/latest.json";
+/// Served from mayorana.ch alongside the builds it describes, so update
+/// checks do not depend on the source repository staying publicly readable.
+const LATEST_URL: &str = "https://mayorana.ch/downloads/appscreens/latest/latest.json";
 
-const RELEASES_URL: &str = "https://github.com/bennekrouf/appscreens/releases/latest";
+/// Where the user is sent to get the new version. The binaries are
+/// distributed from mayorana.ch, not from GitHub.
+const RELEASES_URL: &str = "https://mayorana.ch/en/apps";
 
 #[derive(Debug, Deserialize)]
 struct LatestJson {
