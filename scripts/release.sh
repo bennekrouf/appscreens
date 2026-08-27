@@ -18,7 +18,14 @@ set -euo pipefail
 CARGO="Cargo.toml"
 DRY_RUN=false
 
-CURRENT=$(grep '^version' "$CARGO" | head -1 | sed 's/version = "\(.*\)"/\1/')
+CARGO_VERSION=$(grep '^version' "$CARGO" | head -1 | sed 's/version = "\(.*\)"/\1/')
+
+# Base the bump on the highest tag ever pushed, not on Cargo.toml's version on
+# this branch — a release cut from a branch that never merged back to master
+# (or any divergent history) leaves Cargo.toml stale here, and bumping off it
+# recomputes a tag that already exists elsewhere.
+LATEST_TAG=$(git tag -l 'v*' | sed 's/^v//' | sort -V | tail -1)
+CURRENT="${LATEST_TAG:-$CARGO_VERSION}"
 IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
 
 # ── Compute target version ────────────────────────────────────────────────────

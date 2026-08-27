@@ -405,10 +405,15 @@ jobs:
       - name: Generate latest.json
         env:
           REPO: ${{ github.repository }}
+          DL_BASE: ${{ vars.DOWNLOAD_BASE_URL }}
           TAG: ${{ needs.prepare.outputs.tag || github.ref_name }}
         run: |
           VER="${TAG#v}"
-          BASE="https://github.com/$REPO/releases/download/$TAG"
+          # Versioned, immutable URLs — the same paths the publish step below
+          # rsyncs to. Override with the DOWNLOAD_BASE_URL repo variable if the
+          # download host ever moves.
+          BASE="${DL_BASE:-https://mayorana.ch/downloads/appscreens}"
+          BASE="${BASE%/}/$TAG"
 
           MAC_DMG="appscreens-macos-arm64.dmg"
           LINUX_DEB="appscreens-linux-x86_64.deb"
@@ -439,6 +444,62 @@ jobs:
           EOF
           cat release/latest.json
 
+      # ── Publish the signed artifacts to mayorana.ch ────────────────────────
+      # The binaries are the product and no longer ride on the public GitHub
+      # Release. nginx on the VPS serves them straight off disk from
+      #   /var/www/mayorana-downloads/appscreens/{<tag>,latest}/
+      #
+      # `latest/` is synced with --delete so it always matches exactly this
+      # release: when a platform fails to build, its download 404s instead of
+      # quietly serving the previous version under this version's checksum.
+      #
+      # No mkdir over ssh: the deploy key is confined with rrsync and gets no
+      # shell. rsync creates the final path component, and <root>/appscreens
+      # already exists on the server.
+      #
+      # Unset secrets = skip with a warning, so a fork or an unconfigured
+      # checkout still gets a green pipeline and downloadable Actions artifacts.
+      - name: Publish artifacts to mayorana.ch
+        env:
+          SSH_KEY:   ${{ secrets.DIST_SSH_KEY }}
+          SSH_HOST:  ${{ secrets.DIST_SSH_HOST }}
+          SSH_USER:  ${{ secrets.DIST_SSH_USER }}
+          SSH_KNOWN: ${{ secrets.DIST_SSH_KNOWN_HOSTS }}
+          DEST_ROOT: ${{ vars.DIST_DEST_ROOT }}
+          TAG:       ${{ needs.prepare.outputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SSH_KEY:-}" ] || [ -z "${SSH_HOST:-}" ] || [ -z "${SSH_USER:-}" ]; then
+            echo "::warning::DIST_SSH_KEY/HOST/USER not set — artifacts were NOT published."
+            echo "They remain downloadable as Actions artifacts on this run only."
+            exit 0
+          fi
+
+          ROOT="${DEST_ROOT:-}/appscreens"
+
+          install -m 700 -d ~/.ssh
+          trap 'rm -f ~/.ssh/dist_key' EXIT
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/dist_key
+          chmod 600 ~/.ssh/dist_key
+
+          if [ -n "${SSH_KNOWN:-}" ]; then
+            printf '%s\n' "$SSH_KNOWN" > ~/.ssh/known_hosts
+          else
+            echo "::warning::DIST_SSH_KNOWN_HOSTS unset — accepting the host key unverified."
+            ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          fi
+          chmod 600 ~/.ssh/known_hosts
+
+          SSH="ssh -i $HOME/.ssh/dist_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
+
+          # Versioned copy first: if the latest/ sync then fails, the release
+          # is still fetchable at its immutable URL.
+          rsync -av --chmod=F644 -e "$SSH" release/ "$SSH_USER@$SSH_HOST:$ROOT/$TAG/"
+          rsync -av --delete --chmod=F644 -e "$SSH" release/ "$SSH_USER@$SSH_HOST:$ROOT/latest/"
+
+          echo "Published $TAG → $SSH_HOST:$ROOT/{$TAG,latest}/"
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -464,7 +525,7 @@ jobs:
 
           ## For mayorana.ch
           `latest.json` is attached to this release with download URLs and SHA-256 hashes.
-          Stable link: https://github.com/${{ github.repository }}/releases/latest/download/latest.json
+          Stable link: https://mayorana.ch/downloads/appscreens/latest/latest.json
           EOF
           )" \
-            $FILES
+            release/latest.json

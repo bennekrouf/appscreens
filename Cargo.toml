@@ -2,6 +2,7 @@
 name = "appscreens"
 version = "0.1.4"
 edition = "2021"
+license-file = "LICENSE"
 
 [dependencies]
 dioxus = { version = "=0.7.3", features = ["desktop", "mobile"] }
