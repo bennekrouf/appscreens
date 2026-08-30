@@ -79,7 +79,7 @@ dependencies = [
 
 [[package]]
 name = "appscreens"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "ab_glyph",
  "dark-light",
