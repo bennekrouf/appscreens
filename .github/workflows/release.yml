@@ -313,6 +313,59 @@ jobs:
       - name: Install dioxus-cli
         run: cargo install dioxus-cli --locked
 
+      # ── Windows code signing ───────────────────────────────────────────────
+      # Unconfigured repos still build; the .msi just ships unsigned and
+      # SmartScreen warns on download. Set all six secrets to enable.
+      - name: Check Windows signing secrets
+        id: winsign
+        shell: pwsh
+        env:
+          AZURE_TENANT_ID:     ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID:     ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          TS_ENDPOINT:         ${{ secrets.TRUSTED_SIGNING_ENDPOINT }}
+          TS_ACCOUNT:          ${{ secrets.TRUSTED_SIGNING_ACCOUNT }}
+          TS_CERT_PROFILE:     ${{ secrets.TRUSTED_SIGNING_CERT_PROFILE }}
+        run: |
+          $names = @('AZURE_TENANT_ID','AZURE_CLIENT_ID','AZURE_CLIENT_SECRET',
+                     'TS_ENDPOINT','TS_ACCOUNT','TS_CERT_PROFILE')
+          $missing = $names | Where-Object { -not [Environment]::GetEnvironmentVariable($_) }
+          if ($missing.Count -eq 0) {
+            "have=true" | Out-File -Append $env:GITHUB_OUTPUT
+            Write-Host "All Windows signing secrets present."
+          } elseif ($missing.Count -eq $names.Count) {
+            "have=false" | Out-File -Append $env:GITHUB_OUTPUT
+            Write-Host "::warning::No Windows signing secrets configured — the .msi will ship unsigned and SmartScreen will warn on download."
+          } else {
+            Write-Host "::error::Incomplete Windows signing configuration. Missing: $($missing -join ', ')"
+            Write-Host "Set all six, or none at all to skip signing."
+            exit 1
+          }
+
+      # `dx bundle` compiles and packages in one shot, which leaves no seam to
+      # sign the executable before it goes into the .msi. Building first gives
+      # us that seam: cargo fingerprints its inputs, not its outputs, so the
+      # bundle step below reuses this binary instead of rebuilding, and the
+      # signature survives into the installer.
+      - name: Pre-build binary
+        run: cargo build --release
+
+      - name: Sign application binary
+        if: steps.winsign.outputs.have == 'true'
+        uses: azure/trusted-signing-action@v0
+        with:
+          azure-tenant-id:     ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id:     ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint:                     ${{ secrets.TRUSTED_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.TRUSTED_SIGNING_ACCOUNT }}
+          certificate-profile-name:     ${{ secrets.TRUSTED_SIGNING_CERT_PROFILE }}
+          files-folder: target\release
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
       - name: Bundle
         run: dx bundle --platform desktop --release --package-types msi
 
@@ -327,42 +380,24 @@ jobs:
           Copy-Item $msi.FullName dist\appscreens-windows-setup.msi
           Get-ChildItem dist
 
-      # ── SignPath Foundation: code-sign the .msi for free (OSS only) ────────
-      # Uncomment when SignPath Foundation has approved the project and the
-      # required secret/inputs are configured. Until then the .msi ships
-      # unsigned (SmartScreen will warn on download).
-      #
-      # Setup (one-time, after SignPath approval):
-      #   1. Add repo secret `SIGNPATH_API_TOKEN`            (from SignPath dashboard).
-      #   2. Replace the three placeholders below with values from your
-      #      SignPath project page:
-      #        - organization-id           (UUID)
-      #        - project-slug              (e.g. "appscreens")
-      #        - signing-policy-slug       (e.g. "release-signing")
-      #
-      # - name: Upload unsigned artifact to GitHub
-      #   id: upload-unsigned
-      #   uses: actions/upload-artifact@v4
-      #   with:
-      #     name: appscreens-windows-unsigned
-      #     path: dist/appscreens-windows-setup.msi
-      #
-      # - name: Submit signing request to SignPath
-      #   uses: signpath/github-action-submit-signing-request@v1
-      #   with:
-      #     api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-      #     organization-id: 'REPLACE-WITH-SIGNPATH-ORG-UUID'
-      #     project-slug:    'REPLACE-WITH-SIGNPATH-PROJECT-SLUG'
-      #     signing-policy-slug: 'REPLACE-WITH-SIGNPATH-POLICY-SLUG'
-      #     github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
-      #     wait-for-completion: true
-      #     output-artifact-directory: dist-signed
-      #
-      # - name: Replace .msi with the signed version
-      #   shell: pwsh
-      #   run: |
-      #     Move-Item -Force dist-signed\appscreens-windows-setup.msi dist\appscreens-windows-setup.msi
-      #     Write-Host "Signed .msi in place."
+      # Signing provider: Azure Trusted Signing, the same certificate the other
+      # repos use. SignPath Foundation is the free alternative for open-source
+      # projects, but it requires an established user base.
+      - name: Sign installer
+        if: steps.winsign.outputs.have == 'true'
+        uses: azure/trusted-signing-action@v0
+        with:
+          azure-tenant-id:     ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id:     ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint:                     ${{ secrets.TRUSTED_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.TRUSTED_SIGNING_ACCOUNT }}
+          certificate-profile-name:     ${{ secrets.TRUSTED_SIGNING_CERT_PROFILE }}
+          files-folder: dist
+          files-folder-filter: msi
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
 
       # ── Compute SHA-256 AFTER signing so the hash matches what users get ───
       - name: Hash artifacts
