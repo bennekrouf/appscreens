@@ -1,5 +1,5 @@
 /* ══════════════════════════════════════════════
-   CSS VARIABLES — dark (default) / light
+   DESIGN TOKENS — dark (default) / light
 
    Mood: cool indigo. AppScreens exists to show an app at its best in the
    store, so the chrome stays quiet and lets the generated screenshots carry
@@ -11,6 +11,17 @@
    Every colour in this file is a token. A literal hex below this block is a
    bug: it will not flip with the theme, which is how the error card and the
    Android buttons ended up as near-black boxes on the cream light theme.
+
+   The same rule now applies to size. Type comes from the six --fs-* steps,
+   spacing from the --s* scale, corners from the three --r-* radii. A raw px
+   below this block is a bug for the same reason a raw hex is: it is a value
+   nobody can hold against the system, and 24 font sizes and 30 padding
+   values is what you get when every rule is written free-hand.
+
+   TEXT RAMP — four tiers, each ≈1.5× the contrast of the next, every one of
+   them ≥4.5:1 on --bg0/--bg1 in BOTH themes. --border is a hairline colour
+   and is never a text colour: used that way it measured 1.44:1, which is not
+   "subtle", it is invisible. --text4 is the quiet tier that replaced it.
 ══════════════════════════════════════════════ */
 :root {
     --bg0:            #0b0e16;
@@ -19,9 +30,11 @@
     --bg3:            #171d2c;
     --border:         #2b3450;
     --border2:        #1d2435;
-    --text1:          #e7ecf7;
-    --text2:          #98a4bf;
-    --text3:          #6c7794;
+
+    --text1:          #e7ecf7;   /* 14.95:1 on --bg1 */
+    --text2:          #b6c0d6;   /*  9.69:1 */
+    --text3:          #8f9cb8;   /*  6.42:1 */
+    --text4:          #76839f;   /*  4.65:1 — placeholders, meta, empty states */
 
     --blue:           #5aa7ff;
     --blue-bg:        #0078d4;
@@ -38,6 +51,7 @@
     --red:            #ff7b7b;
     --red-bg:         #d24141;
     --red-dark:       #2b1618;
+    --red-wash:       rgba(255,123,123,0.12);
 
     --yellow:         #ecb44a;
     --orange:         #ef8f47;
@@ -54,6 +68,38 @@
     --surface-log:    #070a11;
     /* Text on a filled accent button — fixed, because the accent behind it is. */
     --on-accent:      #ffffff;
+
+    /* Elevation is theme-dependent: a 50%-black shadow reads as depth on an
+       indigo ground and as a smudge on cream. */
+    --shadow-md:      0 8px 24px rgba(0,0,0,0.45);
+    --shadow-lg:      0 20px 60px rgba(0,0,0,0.55);
+    --scrim:          rgba(0,0,0,0.55);
+
+    --focus:          #5aa7ff;
+
+    /* ── Type scale — six steps, nothing between them ───────────────────── */
+    --fs-display:     32px;   /* picker wordmark */
+    --fs-h1:          20px;   /* project name */
+    --fs-lead:        15px;   /* dialog titles, primary actions */
+    --fs-body:        14px;   /* default */
+    --fs-sm:        12.5px;   /* labels, tabs, secondary controls */
+    --fs-xs:        11.5px;   /* hints, badges, meta */
+
+    /* ── Spacing — 4px base ─────────────────────────────────────────────── */
+    --s1:  4px;
+    --s2:  8px;
+    --s3: 12px;
+    --s4: 16px;
+    --s5: 24px;
+    --s6: 32px;
+    --s7: 48px;
+
+    /* ── Radii — three ──────────────────────────────────────────────────── */
+    --r-sm:  6px;
+    --r-md: 10px;
+    --r-lg: 14px;
+
+    --mono: 'SF Mono', 'Menlo', 'Monaco', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
 }
 
 body.light {
@@ -63,9 +109,11 @@ body.light {
     --bg3:            #dfe6f1;
     --border:         #cfd8e6;
     --border2:        #eaeff7;
-    --text1:          #172032;
-    --text2:          #53607a;
-    --text3:          #7d8899;
+
+    --text1:          #172032;   /* 16.29:1 on --bg1 */
+    --text2:          #3b465d;   /*  9.46:1 */
+    --text3:          #566378;   /*  6.08:1 */
+    --text4:          #66738a;   /*  4.79:1 */
 
     --blue:           #0063b1;
     --blue-bg:        #0078d4;
@@ -82,6 +130,7 @@ body.light {
     --red:            #c33a3a;
     --red-bg:         #d24141;
     --red-dark:       #fbe4e4;
+    --red-wash:       rgba(195,58,58,0.10);
 
     --yellow:         #9a6a10;
     --orange:         #c2560c;
@@ -93,13 +142,19 @@ body.light {
 
     --surface-log:    #f0f4fa;
     --on-accent:      #ffffff;
+
+    --shadow-md:      0 8px 24px rgba(23,32,50,0.10);
+    --shadow-lg:      0 20px 50px rgba(23,32,50,0.16);
+    --scrim:          rgba(23,32,50,0.28);
+
+    --focus:          #0078d4;
 }
 
-* { box-sizing: border-box; }
+*, *::before, *::after { box-sizing: border-box; }
 
 body {
-    font-family: 'SF Mono', 'Menlo', 'Monaco', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
-    font-size: 14px;
+    font-family: var(--mono);
+    font-size: var(--fs-body);
     background: var(--bg0);
     color: var(--text1);
     margin: 0;
@@ -111,6 +166,17 @@ body {
     min-height: 100vh;
 }
 
+/* Form controls do not inherit type. Without this every <button> and <input>
+   rendered in the UA default (Arial here) and every <textarea> in generic
+   monospace, so a field's label and its value were set in three different
+   faces. This one rule is what nine hand-written `font-family: 'SF Mono'`
+   patches elsewhere in this file were working around. */
+input, button, textarea, select {
+    font: inherit;
+    color: inherit;
+    letter-spacing: inherit;
+}
+
 #app {
     display: flex;
     flex-direction: column;
@@ -118,25 +184,50 @@ body {
     min-height: 100vh;
 }
 
+/* ── Focus ──────────────────────────────────────────────────────────────
+   One visible ring for every interactive element, drawn outside the control
+   so it never shifts layout. :focus-visible, so pointer users never see it. */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+    border-radius: var(--r-sm);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+}
+
 /* Theme toggle (top-right) — matches ais-runner. */
 .btn-theme {
     position: fixed;
-    top: 12px;
-    right: 16px;
+    top: var(--s3);
+    right: var(--s4);
     z-index: 1000;
-    font-size: 15px;
-    background: none;
+    font-size: var(--fs-lead);
+    background: var(--bg1);
     border: 1px solid var(--border);
-    border-radius: 5px;
+    border-radius: var(--r-sm);
     cursor: pointer;
-    padding: 0 7px;
+    padding: 0 var(--s2);
     color: var(--text2);
-    transition: border-color 0.15s, color 0.15s;
-    height: 30px;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+    height: 34px;
+    min-width: 34px;
     display: flex;
     align-items: center;
+    justify-content: center;
 }
 .btn-theme:hover { border-color: var(--blue); color: var(--blue); }
+.btn-theme:active { background: var(--bg2); }
 
 /* ══════════════════════════════════════════════
    Update banner
@@ -149,40 +240,60 @@ body {
     z-index: 999;
     background: var(--blue-bg);
     color: var(--on-accent);
-    padding: 8px 16px;
+    padding: var(--s2) var(--s4);
     display: flex;
     align-items: center;
-    gap: 16px;
-    font-size: 13px;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+    gap: var(--s4);
+    font-size: var(--fs-sm);
+    box-shadow: var(--shadow-md);
 }
-.update-banner-text { flex: 1; }
+/* Single line at every width. The banner is fixed, so the offsets below are
+   computed from its height — letting the message wrap made it taller than
+   they allow and it went back to covering the page header on a phone. */
+.update-banner-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 .update-banner-text strong { font-weight: 700; }
 .update-banner-link {
     color: var(--on-accent);
     text-decoration: underline;
     font-weight: 600;
-    padding: 4px 10px;
+    padding: var(--s1) var(--s3);
     border: 1px solid rgba(255,255,255,0.4);
-    border-radius: 4px;
+    border-radius: var(--r-sm);
     transition: background 0.15s;
 }
 .update-banner-link:hover { background: rgba(255,255,255,0.15); }
+.update-banner-link:focus-visible { outline-color: var(--on-accent); }
 .update-banner-dismiss {
+    display: flex;
+    align-items: center;
+    justify-content: center;
     background: transparent;
     border: none;
     color: var(--on-accent);
-    font-size: 20px;
     line-height: 1;
     cursor: pointer;
-    padding: 0 4px;
-    opacity: 0.7;
+    padding: 0 var(--s1);
+    height: 28px;
+    min-width: 28px;
+    border-radius: var(--r-sm);
+    opacity: 0.75;
 }
-.update-banner-dismiss:hover { opacity: 1; }
+.update-banner-dismiss:hover { opacity: 1; background: rgba(255,255,255,0.15); }
+.update-banner-dismiss:focus-visible { outline-color: var(--on-accent); }
 
-
-/* AppScreens */
-*, *::before, *::after { box-sizing: border-box; }
+/* The banner is fixed, so it sat on top of both the page header and the theme
+   toggle (which shares its top-right corner). It renders before its siblings,
+   so the sibling combinator can move everything it would otherwise cover —
+   no extra state and no wrapper class needed. */
+.update-banner ~ .btn-theme { top: 56px; }
+.update-banner ~ .app-container { padding-top: 60px; }
+.update-banner ~ .picker-screen { padding-top: 84px; }
 
 /* ------------------------------------------------------------------ */
 /* Project Picker                                                       */
@@ -192,7 +303,7 @@ body {
     display: flex;
     align-items: flex-start;
     justify-content: center;
-    padding: 60px 20px 60px;
+    padding: var(--s7) var(--s5);
 }
 
 .picker-inner {
@@ -200,40 +311,56 @@ body {
     max-width: 600px;
     display: flex;
     flex-direction: column;
-    gap: 20px;
+    gap: var(--s5);
+}
+
+.picker-logo {
+    display: flex;
+    align-items: center;
+    gap: var(--s4);
+}
+
+/* The app ships an icon; the first screen may as well use it. */
+.picker-logo-mark {
+    width: 56px;
+    height: 56px;
+    border-radius: var(--r-lg);
+    flex-shrink: 0;
 }
 
 .picker-logo h1 {
-    font-size: 2.4rem;
+    font-size: var(--fs-display);
+    line-height: 1.1;
+    letter-spacing: -0.01em;
     color: var(--text1);
-    margin: 0 0 6px 0;
+    margin: 0 0 var(--s1) 0;
 }
 
 .picker-subtitle {
-    color: var(--text2);
-    font-size: 0.9rem;
+    color: var(--text3);
+    font-size: var(--fs-sm);
     margin: 0;
 }
 
 .picker-actions {
     display: flex;
-    gap: 10px;
+    gap: var(--s3);
 }
 
 .picker-new-btn {
     flex: 1;
-    padding: 14px 20px;
-    font-size: 1rem;
-    border-radius: 10px;
+    padding: var(--s3) var(--s5);
+    font-size: var(--fs-lead);
+    border-radius: var(--r-md);
 }
 
 .picker-open-btn {
     flex: 1;
-    padding: 14px 20px;
-    font-size: 1rem;
-    border-radius: 10px;
+    padding: var(--s3) var(--s5);
+    font-size: var(--fs-lead);
+    border-radius: var(--r-md);
     background: var(--bg1);
-    border: 1px solid var(--bg2);
+    border: 1px solid var(--border);
     color: var(--text1);
     cursor: pointer;
     transition: background 0.15s, border-color 0.15s;
@@ -243,6 +370,7 @@ body {
     background: var(--bg3);
     border-color: var(--blue-bg);
 }
+.picker-open-btn:active { background: var(--bg2); }
 
 /* ---- New Project wizard panel ---- */
 .new-project-panel {
@@ -250,47 +378,48 @@ body {
        (there are several) rendered as dark-on-dark once light mode flipped
        --text1 to a dark colour. */
     background: var(--bg1);
-    border: 1px solid var(--bg2);
-    border-radius: 12px;
-    padding: 22px 22px 18px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    padding: var(--s5);
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: var(--s5);
 }
 
 .new-project-title {
     color: var(--text1);
-    font-size: 1rem;
-    margin: 0 0 4px 0;
+    font-size: var(--fs-lead);
+    margin: 0;
     font-weight: 600;
 }
 
 .new-project-error {
     color: var(--red);
-    font-size: 0.85rem;
+    font-size: var(--fs-sm);
     margin: 0;
-    background: rgba(239,68,68,0.1);
-    border: 1px solid rgba(239,68,68,0.3);
-    border-radius: 6px;
-    padding: 8px 12px;
+    background: var(--red-wash);
+    border: 1px solid var(--red-bg);
+    border-radius: var(--r-sm);
+    padding: var(--s2) var(--s3);
 }
 
 /* Platform selector buttons */
 .platform-selector {
     display: flex;
-    gap: 6px;
+    gap: var(--s2);
     flex-wrap: wrap;
 }
 
 .platform-btn {
-    padding: 7px 14px;
-    border-radius: 8px;
-    border: 1px solid var(--bg2);
+    padding: var(--s2) var(--s3);
+    border-radius: var(--r-sm);
+    border: 1px solid var(--border);
     background: var(--bg1);
     /* Was a fixed #bbb — reads fine on --bg1's dark value but is far too
        light against --bg1's light-mode cream. */
     color: var(--text2);
-    font-size: 0.85rem;
+    font-size: var(--fs-sm);
+    min-height: 34px;
     cursor: pointer;
     transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
@@ -300,6 +429,7 @@ body {
     border-color: var(--blue-bg);
     color: var(--text1);
 }
+.platform-btn:active { background: var(--bg2); }
 
 .platform-btn-active {
     /* Was a hardcoded navy (#1d3461) paired with var(--text1) — invisible
@@ -317,44 +447,42 @@ body {
 .folder-pick-row {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--s3);
     flex-wrap: wrap;
 }
 
 .folder-pick-path {
-    font-family: 'SF Mono', Monaco, monospace;
-    font-size: 0.78rem;
-    color: var(--green);
+    font-size: var(--fs-xs);
+    color: var(--text2);
     word-break: break-all;
 }
 
 .folder-pick-hint {
     color: var(--text3);
-    font-size: 0.85rem;
+    font-size: var(--fs-sm);
 }
 
 .picker-recents {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: var(--s2);
 }
 
 .picker-recents-label {
     color: var(--text3);
-    font-size: 0.75rem;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    margin: 0 0 4px 0;
+    font-size: var(--fs-xs);
+    letter-spacing: 0.02em;
+    margin: 0 0 var(--s1) 0;
 }
 
 .picker-recent-item {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: var(--s1);
     background: var(--bg1);
-    border: 1px solid var(--bg2);
-    border-radius: 8px;
-    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    padding: var(--s3) var(--s4);
     text-align: left;
     cursor: pointer;
     transition: background 0.15s, border-color 0.15s;
@@ -365,17 +493,17 @@ body {
     background: var(--bg3);
     border-color: var(--blue-bg);
 }
+.picker-recent-item:active { background: var(--bg2); }
 
 .picker-recent-name {
     color: var(--text1);
-    font-size: 0.9rem;
+    font-size: var(--fs-body);
     font-weight: 500;
 }
 
 .picker-recent-path {
-    color: var(--text3);
-    font-size: 0.75rem;
-    font-family: 'SF Mono', Monaco, monospace;
+    color: var(--text4);
+    font-size: var(--fs-xs);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -386,47 +514,52 @@ body {
 /* ------------------------------------------------------------------ */
 .app-container {
     max-width: 1100px;
+    width: 100%;
     margin: 0 auto;
-    padding: 32px 32px 60px;
+    padding: var(--s6) var(--s6) var(--s7);
 }
 
 h1 {
-    font-size: 1.4rem;
+    font-size: var(--fs-h1);
+    line-height: 1.2;
     color: var(--text1);
-    margin: 0 0 2px 0;
+    margin: 0 0 var(--s1) 0;
 }
 
 .subtitle {
     color: var(--text3);
-    font-size: 0.75rem;
+    font-size: var(--fs-xs);
     margin: 0;
-    font-family: 'SF Mono', Monaco, monospace;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     max-width: 420px;
 }
 
+/* A section heading is the strongest small thing in its card, not the
+   faintest. It used to be --text3 at 0.82rem sitting above --text1 body
+   copy, which inverted the hierarchy it was supposed to establish. */
 h2 {
-    font-size: 0.82rem;
-    color: var(--text3);
-    margin: 0 0 12px 0;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
+    font-size: var(--fs-sm);
+    color: var(--text1);
+    margin: 0 0 var(--s3) 0;
+    font-weight: 700;
+    letter-spacing: 0.02em;
 }
 
+/* Padding inside a card is smaller than the gap between cards, so the five
+   numbered steps read as five groups rather than one continuous field. */
 .card {
     background: var(--bg1);
-    border: 1px solid var(--bg2);
-    border-radius: 10px;
-    padding: 18px 20px;
-    margin-bottom: 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    padding: var(--s5);
+    margin-bottom: var(--s6);
 }
 
 .card-hint {
     margin-top: 0;
-    margin-bottom: 10px;
+    margin-bottom: var(--s4);
 }
 
 /* ------------------------------------------------------------------ */
@@ -436,23 +569,40 @@ h2 {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 20px;
-    gap: 12px;
+    margin-bottom: var(--s6);
+    gap: var(--s3);
 }
 
 .header-left {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: var(--s3);
     min-width: 0;
     flex: 1;
 }
 
-.btn-back {
-    font-size: 1.3rem;
-    line-height: 1;
+.btn-back { flex-shrink: 0; }
+
+/* ------------------------------------------------------------------ */
+/* Icons                                                                */
+/* ------------------------------------------------------------------ */
+/* Inline SVG replaced the emoji that used to label these controls. Emoji
+   render as full-colour glyphs in a monochrome indigo UI, so they were the
+   loudest thing on screen while carrying no meaning — and a 🐛 on a build
+   button reads as "report a bug". currentColor keeps an icon on whatever
+   accent its control already owns. */
+.icon {
+    width: 15px;
+    height: 15px;
     flex-shrink: 0;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.75;
+    stroke-linecap: round;
+    stroke-linejoin: round;
 }
+.icon-fill { fill: currentColor; stroke: none; }
+.icon-lg { width: 18px; height: 18px; }
 
 /* ------------------------------------------------------------------ */
 /* Buttons                                                              */
@@ -461,15 +611,22 @@ h2 {
     background: var(--bg2);
     color: var(--text1);
     border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 9px 18px;
-    font-size: 0.88rem;
+    border-radius: var(--r-sm);
+    padding: var(--s2) var(--s4);
+    font-size: var(--fs-sm);
+    min-height: 34px;
     cursor: pointer;
     transition: background 0.15s;
     white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--s2);
 }
 .btn:hover { background: var(--border); }
+.btn:active { background: var(--bg3); }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn:disabled:active { background: var(--bg2); }
 
 .btn-primary {
     background: var(--blue-bg);
@@ -480,6 +637,7 @@ h2 {
     color: var(--on-accent);
 }
 .btn-primary:hover { background: var(--blue-hover); }
+.btn-primary:active { background: var(--blue-bg); filter: brightness(0.92); }
 /* Dim rather than recolor — matches every other disabled button below
    (.btn:disabled, .btn-build:disabled, .btn-publish:disabled). The custom
    background/color this replaced used --blue-dark, which inverts brightness
@@ -491,24 +649,24 @@ h2 {
     background: var(--bg2);
     color: var(--text2);
     border: 1px solid var(--border);
-    border-radius: 8px;
-    width: 38px;
-    height: 38px;
+    border-radius: var(--r-sm);
+    width: 34px;
+    height: 34px;
+    min-height: 34px;
     display: flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
     padding: 0;
-    font-size: 0.9rem;
+    font-size: var(--fs-body);
     transition: background 0.15s, color 0.15s;
     flex-shrink: 0;
 }
 .btn-icon:hover { background: var(--border); color: var(--text1); }
+.btn-icon:active { background: var(--bg3); }
 
 .btn-dismiss {
-    margin-top: 8px;
-    padding: 6px 14px;
-    font-size: 0.82rem;
+    margin-top: var(--s2);
 }
 
 /* ------------------------------------------------------------------ */
@@ -516,19 +674,16 @@ h2 {
 /* ------------------------------------------------------------------ */
 .generate-row {
     display: flex;
-    gap: 12px;
-    margin-bottom: 12px;
+    gap: var(--s3);
+    margin-bottom: var(--s6);
 }
 
 .btn-generate {
     flex: 1;
-    padding: 13px 20px;
-    font-size: 0.95rem;
-    border-radius: 10px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
+    padding: var(--s3) var(--s5);
+    font-size: var(--fs-lead);
+    min-height: 46px;
+    border-radius: var(--r-md);
 }
 
 .btn-manual {
@@ -541,6 +696,7 @@ h2 {
     color: var(--text1);
 }
 .btn-manual:hover { background: var(--bg2); }
+.btn-manual:active { background: var(--bg3); }
 
 /* ------------------------------------------------------------------ */
 /* Spinner                                                              */
@@ -571,50 +727,58 @@ h2 {
 .text-input {
     width: 100%;
     background: var(--bg0);
-    border: 1px solid var(--bg2);
-    border-radius: 8px;
-    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    padding: var(--s2) var(--s3);
     color: var(--text1);
-    font-size: 0.88rem;
+    font-size: var(--fs-body);
+    min-height: 36px;
     outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
 }
 .text-input:focus { border-color: var(--blue-bg); }
-.text-input::placeholder { color: var(--border); }
+.text-input:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+/* --border is a hairline colour: as placeholder text it measured 1.57:1 in
+   dark and 1.35:1 in light, i.e. not visible. --text4 is the quiet-but-legible
+   tier that exists for exactly this. */
+.text-input::placeholder { color: var(--text4); opacity: 1; }
 
-.small-input { padding: 7px 10px; font-size: 0.82rem; }
+.small-input { padding: var(--s1) var(--s2); font-size: var(--fs-sm); min-height: 32px; }
+
+.theme-textarea {
+    min-height: 76px;
+    line-height: 1.5;
+    resize: vertical;
+    padding: var(--s3);
+}
 
 /* ------------------------------------------------------------------ */
 /* Source list                                                          */
 /* ------------------------------------------------------------------ */
-.source-header-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 4px;
-}
-
 .source-count {
     color: var(--text3);
-    font-size: 0.82rem;
+    font-size: var(--fs-sm);
 }
 
-.source-list { margin-top: 10px; }
+.source-list { margin-top: var(--s3); }
 
 .source-item {
     display: flex;
     align-items: flex-start;
-    gap: 10px;
-    padding: 8px 0;
-    border-bottom: 1px solid var(--bg1);
+    gap: var(--s3);
+    padding: var(--s3) 0;
+    border-bottom: 1px solid var(--border2);
 }
 .source-item:last-child { border-bottom: none; }
 
+/* `cover` cropped the top and bottom off every 9:19.5 phone screenshot in a
+   9:16 box. This is a preview of the source image, so it shows all of it. */
 .source-thumb {
     width: 54px;
     height: 96px;
-    object-fit: cover;
-    border-radius: 6px;
-    border: 1px solid var(--bg2);
+    object-fit: contain;
+    border-radius: var(--r-sm);
+    border: 1px solid var(--border);
     flex-shrink: 0;
     background: var(--bg0);
 }
@@ -622,7 +786,7 @@ h2 {
 .source-item-right {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: var(--s2);
     flex: 1;
     min-width: 0;
 }
@@ -630,21 +794,20 @@ h2 {
 .source-info {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--s2);
     min-width: 0;
 }
 
 .source-index {
-    color: var(--border);
-    font-size: 0.78rem;
+    color: var(--text4);
+    font-size: var(--fs-xs);
     flex-shrink: 0;
     min-width: 18px;
 }
 
 .source-path {
     color: var(--text3);
-    font-size: 0.76rem;
-    font-family: 'SF Mono', Monaco, monospace;
+    font-size: var(--fs-xs);
     flex: 1;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -655,83 +818,84 @@ h2 {
 .manual-inputs {
     display: flex;
     flex-direction: column;
-    gap: 5px;
+    gap: var(--s2);
 }
 
+/* Sits at the top-right of the row it removes. It used to be the last child
+   of the column holding the inputs, which stranded it on its own line at the
+   far left, below and away from the thing it acts on. */
 .btn-remove {
     background: transparent;
     color: var(--text3);
     border: 1px solid transparent;
-    border-radius: 4px;
-    width: 22px;
-    height: 22px;
+    border-radius: var(--r-sm);
+    width: 32px;
+    height: 32px;
     display: flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    font-size: 0.78rem;
+    font-size: var(--fs-sm);
     padding: 0;
     transition: color 0.15s, background 0.15s;
     flex-shrink: 0;
     align-self: flex-start;
-    margin-top: 2px;
 }
-.btn-remove:hover { color: var(--red); background: rgba(248, 113, 113, 0.1); }
+.btn-remove:hover { color: var(--red); background: var(--red-wash); }
+.btn-remove:active { background: var(--red-wash); filter: brightness(0.9); }
 
 /* ------------------------------------------------------------------ */
 /* Color pickers                                                        */
 /* ------------------------------------------------------------------ */
 .color-inputs {
     display: flex;
-    gap: 24px;
+    gap: var(--s5);
     flex-wrap: wrap;
 }
 
 .color-field {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: var(--s2);
 }
 
 .color-field label {
     color: var(--text3);
-    font-size: 0.78rem;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+    font-size: var(--fs-xs);
+    letter-spacing: 0.02em;
 }
 
 .color-picker-row {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--s2);
 }
 
 .color-picker-row input[type="color"] {
     width: 40px;
-    height: 32px;
-    border: 1px solid var(--bg2);
-    border-radius: 6px;
+    height: 34px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
     background: transparent;
     cursor: pointer;
     padding: 2px;
 }
 
 .hex-input {
-    width: 80px;
-    background: var(--bg1);
-    border: 1px solid var(--bg2);
-    border-radius: 6px;
+    width: 88px;
+    background: var(--bg0);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
     color: var(--text1);
-    font-size: 0.82rem;
-    font-family: 'SF Mono', Monaco, monospace;
-    padding: 4px 8px;
+    font-size: var(--fs-sm);
+    padding: var(--s1) var(--s2);
+    min-height: 34px;
     outline: none;
     transition: border-color 0.15s;
 }
 
-.hex-input:focus {
-    border-color: var(--blue);
-}
+.hex-input:focus { border-color: var(--blue-bg); }
+.hex-input::placeholder { color: var(--text4); opacity: 1; }
 
 /* ------------------------------------------------------------------ */
 /* Error card                                                           */
@@ -742,8 +906,11 @@ h2 {
 }
 .error-card p {
     color: var(--red);
-    font-size: 0.85rem;
-    margin: 0 0 4px 0;
+    font-size: var(--fs-body);
+    margin: 0 0 var(--s1) 0;
+    display: flex;
+    align-items: center;
+    gap: var(--s2);
 }
 
 /* ------------------------------------------------------------------ */
@@ -753,48 +920,61 @@ h2 {
 
 .output-tabs {
     display: flex;
-    border-bottom: 1px solid var(--bg2);
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
 }
 
 .output-tab {
     background: transparent;
     color: var(--text3);
     border: none;
-    padding: 12px 18px;
-    font-size: 0.84rem;
+    padding: var(--s3) var(--s4);
+    font-size: var(--fs-sm);
     cursor: pointer;
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--s2);
+    min-height: 42px;
     transition: color 0.15s, background 0.15s;
     border-bottom: 2px solid transparent;
     margin-bottom: -1px;
 }
-.output-tab:hover { color: var(--text2); }
-.output-tab.active { color: var(--blue-bg); border-bottom-color: var(--blue-bg); }
+.output-tab:hover { color: var(--text1); }
+/* One active signal for the whole strip. It used to be blue here, violet on
+   Publish and orange on Build, so "which tab is selected" stopped being a
+   single learnable cue; the per-domain colour now lives on the icon only. */
+.output-tab.active { color: var(--text1); border-bottom-color: var(--blue-bg); font-weight: 600; }
 
 .tab-badge {
     background: var(--bg2);
     color: var(--text2);
-    font-size: 0.7rem;
-    border-radius: 10px;
-    padding: 1px 6px;
+    font-size: var(--fs-xs);
+    border-radius: 999px;   /* pill — not a corner radius, so not from --r-* */
+    padding: 1px var(--s2);
     font-weight: 600;
 }
 .output-tab.active .tab-badge { background: var(--blue-dark); color: var(--blue); }
 
+/* Progress / Generated / Saved are views of output; Publish and Build are
+   operations. Same strip, but separated so the two kinds read as two groups
+   instead of one arbitrary run. */
+.output-tab-group-end {
+    margin-left: auto;
+    border-left: 1px solid var(--border);
+}
+
+/* One scroll region, not three. The log below used to scroll inside this,
+   which scrolled inside the page. */
 .output-content {
-    padding: 16px 20px;
+    padding: var(--s4) var(--s5);
     min-height: 120px;
-    max-height: 340px;
-    overflow-y: auto;
 }
 
 .output-empty {
-    color: var(--border);
-    font-size: 0.84rem;
+    color: var(--text4);
+    font-size: var(--fs-sm);
     text-align: center;
-    padding: 24px 0;
+    padding: var(--s5) 0;
     margin: 0;
 }
 
@@ -802,56 +982,63 @@ h2 {
 .log-scroll { display: flex; flex-direction: column; gap: 2px; }
 .log-line {
     color: var(--green);
-    font-family: 'SF Mono', Monaco, monospace;
-    font-size: 0.78rem;
+    font-size: var(--fs-xs);
     margin: 0;
-    line-height: 1.5;
+    line-height: 1.55;
 }
 
 /* Preview grid */
 .preview-grid {
     display: flex;
     flex-wrap: wrap;
-    gap: 14px;
+    gap: var(--s4);
 }
 .preview-item { flex: 1; min-width: 140px; max-width: 240px; }
 .preview-label {
-    color: var(--text2);
-    font-size: 0.78rem;
-    margin: 0 0 5px 0;
+    color: var(--text3);
+    font-size: var(--fs-xs);
+    margin: 0 0 var(--s1) 0;
 }
 .preview-img {
     max-width: 100%;
     max-height: 300px;
-    border-radius: 8px;
-    border: 1px solid var(--bg2);
+    border-radius: var(--r-sm);
+    border: 1px solid var(--border);
 }
 
 /* Saved paths */
 .output-row {
     display: flex;
     align-items: flex-start;
-    gap: 10px;
-    padding: 5px 0;
-    border-bottom: 1px solid var(--bg1);
+    gap: var(--s3);
+    padding: var(--s1) 0;
+    border-bottom: 1px solid var(--border2);
 }
 .output-row:last-child { border-bottom: none; }
-.output-label { color: var(--blue-bg); font-size: 0.8rem; font-weight: 500; min-width: 200px; flex-shrink: 0; }
-.output-path { color: var(--text3); font-size: 0.75rem; font-family: 'SF Mono', Monaco, monospace; word-break: break-all; }
+/* --blue-bg is a fill colour and only reaches 3.91:1 as text on the dark
+   card; --blue is the text member of the pair (7.09:1 / 6.14:1). */
+.output-label { color: var(--blue); font-size: var(--fs-sm); font-weight: 500; min-width: 200px; flex-shrink: 0; }
+.output-path { color: var(--text3); font-size: var(--fs-xs); word-break: break-all; }
 
 /* ------------------------------------------------------------------ */
 /* Theme history                                                        */
 /* ------------------------------------------------------------------ */
-.theme-history { margin-top: 10px; }
-.theme-history-label { color: var(--border); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 6px 0; }
-.theme-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.theme-history { margin-top: var(--s4); }
+.theme-history-label {
+    color: var(--text3);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.02em;
+    margin: 0 0 var(--s2) 0;
+}
+.theme-chips { display: flex; flex-wrap: wrap; gap: var(--s2); }
 .theme-chip {
     background: var(--bg0);
     color: var(--text2);
-    border: 1px solid var(--bg2);
-    border-radius: 6px;
-    padding: 4px 9px;
-    font-size: 0.76rem;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    padding: var(--s1) var(--s3);
+    font-size: var(--fs-sm);
+    min-height: 30px;
     cursor: pointer;
     transition: background 0.15s, color 0.15s, border-color 0.15s;
     max-width: 100%;
@@ -861,14 +1048,16 @@ h2 {
     text-align: left;
 }
 .theme-chip:hover { background: var(--bg3); color: var(--text1); border-color: var(--blue-bg); }
+.theme-chip:active { background: var(--bg2); }
 
 /* ------------------------------------------------------------------ */
-/* Misc                                                                 */
+/* Misc                                                                */
 /* ------------------------------------------------------------------ */
 .hint {
     color: var(--text3);
-    font-size: 0.78rem;
-    margin: 8px 0 0 0;
+    font-size: var(--fs-sm);
+    margin: var(--s2) 0 0 0;
+    line-height: 1.5;
 }
 
 /* ------------------------------------------------------------------ */
@@ -877,7 +1066,7 @@ h2 {
 .settings-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(0,0,0,0.5);
+    background: var(--scrim);
     z-index: 100;
 }
 .settings-popup {
@@ -886,54 +1075,52 @@ h2 {
     left: 50%;
     transform: translate(-50%, -50%);
     background: var(--bg1);
-    border: 1px solid var(--bg2);
-    border-radius: 14px;
-    padding: 28px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    padding: var(--s6);
     width: 400px;
-    max-width: 90vw;
+    max-width: calc(100vw - var(--s6));
+    /* Without these the dialog was simply cut off at both ends of a short
+       window — title and close button above the viewport, last fields below
+       it, and no way to scroll to either. */
+    max-height: calc(100vh - var(--s7));
+    overflow-y: auto;
+    overscroll-behavior: contain;
     z-index: 101;
-    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+    box-shadow: var(--shadow-lg);
 }
 .settings-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 22px;
+    margin-bottom: var(--s5);
+    position: sticky;
+    top: calc(var(--s6) * -1);
+    background: var(--bg1);
+    padding: var(--s6) 0 var(--s3);
+    margin-top: calc(var(--s6) * -1);
+    z-index: 1;
 }
-.settings-header h2 { margin: 0; color: var(--text1); font-size: 1rem; font-weight: 600; text-transform: none; letter-spacing: 0; }
-.settings-field { margin-bottom: 18px; }
+.settings-header h2 { margin: 0; color: var(--text1); font-size: var(--fs-lead); font-weight: 600; text-transform: none; letter-spacing: 0; }
+.settings-field { margin-bottom: var(--s5); }
 .settings-field label {
     display: block;
     color: var(--text2);
-    font-size: 0.78rem;
-    font-weight: 500;
-    margin-bottom: 5px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    margin-bottom: var(--s2);
+    letter-spacing: 0.02em;
 }
-.settings-hint { color: var(--text3); font-size: 0.73rem; margin: 4px 0 0 0; }
+.settings-hint { color: var(--text3); font-size: var(--fs-xs); margin: var(--s2) 0 0 0; line-height: 1.45; }
 .settings-field input[type="number"] { width: 110px; }
 .settings-path { margin-bottom: 0; }
-
-/* path-picker-row kept for backwards compat */
-.path-picker-row { display: flex; gap: 8px; align-items: stretch; }
-.path-picker-row .text-input { flex: 1; }
-
-/* Tabs (legacy, kept in case) */
-.tabs { display: flex; gap: 4px; margin-bottom: 16px; }
-.tab {
-    background: var(--bg1); color: var(--text3);
-    border: 1px solid var(--bg2); border-radius: 8px;
-    padding: 8px 16px; font-size: 0.85rem; cursor: pointer;
-}
-.tab.active { background: var(--bg2); color: var(--text1); border-color: var(--blue-bg); }
 
 /* ------------------------------------------------------------------ */
 /* Export settings card                                                 */
 /* ------------------------------------------------------------------ */
 .export-settings-grid {
     display: flex;
-    gap: 20px;
+    gap: var(--s5);
     flex-wrap: wrap;
     align-items: flex-start;
 }
@@ -941,34 +1128,31 @@ h2 {
 .export-section {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: var(--s2);
     min-width: 170px;
     flex: 1;
 }
 
 .export-section-label {
-    color: var(--text3);
-    font-size: 0.74rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    margin: 0 0 2px 0;
-}
-
-.export-locale-select {
-    font-size: 0.82rem;
-    padding: 7px 10px;
+    color: var(--text1);
+    font-size: var(--fs-xs);
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    margin: 0 0 var(--s1) 0;
 }
 
 .export-platform-header {
     display: flex;
     align-items: center;
-    gap: 8px;
-    margin-bottom: 4px;
+    gap: var(--s2);
+    margin-bottom: var(--s1);
 }
 
 .export-platform-label {
-    font-size: 0.84rem;
+    display: flex;
+    align-items: center;
+    gap: var(--s2);
+    font-size: var(--fs-body);
     font-weight: 600;
     cursor: pointer;
 }
@@ -979,126 +1163,82 @@ h2 {
 .export-targets {
     display: flex;
     flex-direction: column;
-    gap: 5px;
-    padding-left: 6px;
-    border-left: 2px solid var(--bg2);
+    gap: var(--s1);
+    padding-left: var(--s2);
+    border-left: 2px solid var(--border);
 }
 
 .export-target-row {
     display: flex;
     align-items: center;
-    gap: 7px;
+    gap: var(--s2);
+    min-height: 28px;
 }
 
 .export-target-label {
     display: flex;
     align-items: baseline;
-    gap: 6px;
+    gap: var(--s2);
     cursor: pointer;
 }
 
 .export-target-name {
     color: var(--text1);
-    font-size: 0.8rem;
+    font-size: var(--fs-sm);
 }
 
 .export-target-dim {
-    color: var(--border);
-    font-size: 0.72rem;
-    font-family: 'SF Mono', Monaco, monospace;
+    color: var(--text4);
+    font-size: var(--fs-xs);
 }
 
 /* Checkboxes — minimal style */
 .export-settings-card input[type="checkbox"],
-.export-target-row input[type="checkbox"],
-.locale-checkbox-row input[type="checkbox"] {
+.export-target-row input[type="checkbox"] {
     accent-color: var(--blue-bg);
-    width: 14px;
-    height: 14px;
+    width: 16px;
+    height: 16px;
     cursor: pointer;
     flex-shrink: 0;
 }
 
-/* divider between locale and platform columns */
+/* divider between the platform / colour columns */
 .export-section + .export-section {
-    padding-left: 16px;
-    border-left: 1px solid var(--bg2);
-}
-
-/* Locale multi-select section — slightly wider to fit the checklist */
-.export-section-locales {
-    min-width: 220px;
-    flex: 1.5;
-}
-
-.export-locale-count {
-    color: var(--border);
-    font-size: 0.72rem;
-    font-weight: 400;
-    text-transform: none;
-    letter-spacing: 0;
-}
-
-.locale-checkbox-list {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    max-height: 200px;
-    overflow-y: auto;
-    padding-right: 4px;
-}
-
-.locale-checkbox-row {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    cursor: pointer;
-    padding: 3px 6px;
-    border-radius: 5px;
-    transition: background 0.12s;
-}
-
-.locale-checkbox-row:hover {
-    background: var(--bg3);
-}
-
-.locale-checkbox-row span {
-    color: var(--text1);
-    font-size: 0.82rem;
-}
-
-.locale-code-badge {
-    color: var(--border) !important;
-    font-family: 'SF Mono', Monaco, monospace;
-    font-size: 0.72rem !important;
-    margin-left: auto;
+    padding-left: var(--s5);
+    border-left: 1px solid var(--border2);
 }
 
 /* ------------------------------------------------------------------ */
 /* Logo upload                                                          */
 /* ------------------------------------------------------------------ */
+/* A row: `column` stretched "Choose Logo…" — a minor secondary action — into
+   a full-width bar across the card. */
 .logo-upload-row {
     display: flex;
-    flex-direction: column;
-    gap: 12px;
+    flex-direction: row;
+    align-items: center;
+    gap: var(--s3);
+    flex-wrap: wrap;
 }
 
 .logo-preview {
     display: flex;
     align-items: center;
-    gap: 14px;
+    gap: var(--s3);
     background: var(--bg0);
-    border: 1px solid var(--bg2);
-    border-radius: 8px;
-    padding: 10px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    padding: var(--s2) var(--s3);
+    flex: 1;
+    min-width: 260px;
 }
 
 .logo-thumb {
-    width: 56px;
-    height: 56px;
+    width: 44px;
+    height: 44px;
     object-fit: contain;
-    border-radius: 8px;
-    border: 1px solid var(--bg2);
+    border-radius: var(--r-sm);
+    border: 1px solid var(--border);
     flex-shrink: 0;
     background: var(--bg1);
 }
@@ -1106,15 +1246,14 @@ h2 {
 .logo-info {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--s2);
     flex: 1;
     min-width: 0;
 }
 
 .logo-path {
     color: var(--text3);
-    font-size: 0.75rem;
-    font-family: 'SF Mono', Monaco, monospace;
+    font-size: var(--fs-xs);
     flex: 1;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1125,27 +1264,23 @@ h2 {
 /* ------------------------------------------------------------------ */
 /* Publish tab                                                          */
 /* ------------------------------------------------------------------ */
-.output-tab-publish {
-    margin-left: auto; /* push to the right */
-    color: var(--violet);
-}
-.output-tab-publish.active { color: var(--violet); border-bottom-color: var(--violet); font-weight: 600; }
+.output-tab-publish .icon { color: var(--violet); }
 
 .publish-panel {
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: var(--s4);
 }
 
 .publish-info {
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: var(--s3);
 }
 
 .publish-desc {
     color: var(--text3);
-    font-size: 0.82rem;
+    font-size: var(--fs-sm);
     line-height: 1.6;
     margin: 0;
 }
@@ -1153,25 +1288,36 @@ h2 {
 .publish-desc strong { color: var(--text2); }
 .publish-desc code {
     background: var(--bg0);
-    border: 1px solid var(--bg2);
-    border-radius: 4px;
-    padding: 1px 5px;
-    font-size: 0.76rem;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    padding: 1px var(--s1);
+    font-size: var(--fs-xs);
     color: var(--violet);
-    font-family: 'SF Mono', Monaco, monospace;
+}
+
+.publish-divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: var(--s2) 0;
+    width: 100%;
 }
 
 .publish-status-row {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--s2);
 }
 
+/* Success and failure are not signalled by colour alone — each status
+   carries its own icon. */
 .publish-status {
-    font-size: 0.82rem;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s2);
+    font-size: var(--fs-sm);
     font-weight: 500;
 }
-.publish-idle   { color: var(--text3); }
+.publish-idle    { color: var(--text3); }
 .publish-running { color: var(--blue); }
 .publish-success { color: var(--green); }
 .publish-error   { color: var(--red); }
@@ -1180,35 +1326,46 @@ h2 {
     background: var(--violet-bg);
     border: 1px solid var(--violet-bg);
     color: var(--on-accent);
-    border-radius: 10px;
-    padding: 12px 22px;
-    font-size: 0.95rem;
+    border-radius: var(--r-md);
+    padding: var(--s3) var(--s5);
+    font-size: var(--fs-lead);
+    min-height: 44px;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 8px;
+    gap: var(--s2);
     transition: background 0.15s, border-color 0.15s;
     width: 100%;
 }
 .btn-publish:hover { background: var(--violet-hover); border-color: var(--violet-hover); }
+.btn-publish:active { filter: brightness(0.92); }
 .btn-publish:disabled { opacity: 0.45; cursor: not-allowed; }
 
-.publish-log { display: flex; flex-direction: column; gap: 6px; }
+/* Google Play is a different destination from App Store Connect, so it does
+   not wear the same button. The class was already on the element; it had no
+   rule, so both buttons rendered identically violet. */
+.btn-publish-android {
+    background: var(--green-bg);
+    border-color: var(--green-bg);
+}
+.btn-publish-android:hover { background: var(--green-bg); border-color: var(--green-bg); filter: brightness(1.12); }
+
+.publish-log { display: flex; flex-direction: column; gap: var(--s2); }
 .publish-log-label {
     color: var(--text3);
-    font-size: 0.72rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
+    font-size: var(--fs-xs);
+    letter-spacing: 0.02em;
     margin: 0;
 }
 .publish-log-scroll {
-    max-height: 160px;
+    max-height: 240px;
     background: var(--surface-log);
-    border: 1px solid var(--bg1);
-    border-radius: 6px;
-    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    padding: var(--s2) var(--s3);
     overflow-y: auto;
+    overscroll-behavior: contain;
 }
 
 .log-error   { color: var(--red) !important; }
@@ -1222,62 +1379,63 @@ h2 {
 
 .settings-section-title {
     color: var(--text2);
-    font-size: 0.72rem;
+    font-size: var(--fs-xs);
     font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-    margin: 18px 0 10px 0;
-    padding-bottom: 6px;
-    border-bottom: 1px solid var(--bg2);
+    /* No text-transform: uppercase. It turned "iOS Signing" into "IOS
+       SIGNING", while .export-platform-label rendered the same word as
+       "iOS" a few hundred pixels away. Letter-spacing carries the label
+       treatment instead. */
+    letter-spacing: 0.02em;
+    margin: var(--s5) 0 var(--s3) 0;
+    padding-bottom: var(--s2);
+    border-bottom: 1px solid var(--border);
 }
 
 .settings-path-row {
     display: flex;
-    gap: 8px;
+    gap: var(--s2);
     align-items: stretch;
 }
 .settings-path-row .text-input { flex: 1; }
 .settings-browse-btn { flex-shrink: 0; white-space: nowrap; }
-.settings-short-input { width: 100px !important; }
+.settings-short-input { width: 110px !important; }
 
 /* ------------------------------------------------------------------ */
 /* Build config card (per-project)                                     */
 /* ------------------------------------------------------------------ */
 .build-config-grid {
-    display: flex;
-    /* Larger gap so each (label, input, hint) reads as one block, not as
-       a continuous run of text bleeding into the next field. */
-    gap: 22px 16px;
-    flex-wrap: wrap;
+    display: grid;
+    /* A grid, not wrapping flex: the fields used to have ragged bottoms
+       because some hints wrap to two lines and one column's buttons wrap to
+       two rows, so every column ended at a different height. */
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: var(--s5) var(--s4);
+    align-items: start;
 }
 
 .build-config-field {
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    flex: 1;
-    min-width: 160px;
+    gap: var(--s2);
+    min-width: 0;
 }
 
 /* Strong, full-contrast label sitting tight above its input. */
 .build-config-label {
     color: var(--text1);
-    font-size: 0.72rem;
+    font-size: var(--fs-xs);
     font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    margin-bottom: 2px;
+    letter-spacing: 0.02em;
 }
 
-/* Hint is clearly secondary: smaller, italic, muted, indented under the
-   input it belongs to so it can't be confused with the next field's label. */
+/* Hint is clearly secondary: muted and tucked under the input it belongs to
+   so it can't be confused with the next field's label. */
 .build-config-field .settings-hint {
     color: var(--text3);
-    font-size: 0.7rem;
-    font-style: italic;
+    font-size: var(--fs-xs);
     font-weight: 400;
-    margin: 2px 0 0 2px;
-    line-height: 1.3;
+    margin: 0;
+    line-height: 1.45;
     text-transform: none;
     letter-spacing: 0;
 }
@@ -1285,61 +1443,68 @@ h2 {
 /* ------------------------------------------------------------------ */
 /* Build tab                                                            */
 /* ------------------------------------------------------------------ */
-.output-tab-build { color: var(--orange); }
-.output-tab-build.active { color: var(--orange); border-bottom-color: var(--orange); }
+.output-tab-build .icon { color: var(--orange); }
 
 .build-panel {
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: var(--s4);
 }
 
 .build-status-row {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--s2);
     min-height: 22px;
 }
 
-.build-status { font-size: 0.82rem; font-weight: 500; }
-.build-idle    { color: var(--border); }
+.build-status {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s2);
+    font-size: var(--fs-sm);
+    font-weight: 500;
+}
+.build-idle    { color: var(--text3); }
 .build-running { color: var(--blue); }
 .build-success { color: var(--green); }
 .build-error   { color: var(--red); }
 
 .build-buttons {
     display: flex;
-    gap: 16px;
+    gap: var(--s4);
     flex-wrap: wrap;
+    align-items: flex-start;
 }
 
 .build-platform-group {
     display: flex;
     flex-direction: column;
-    gap: 7px;
+    gap: var(--s2);
     flex: 1;
     min-width: 200px;
 }
 
 .build-platform-title {
-    font-size: 0.74rem;
+    font-size: var(--fs-xs);
     font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    margin: 0 0 2px 0;
+    /* No uppercase — see .settings-section-title. */
+    letter-spacing: 0.02em;
+    margin: 0;
 }
 .build-ios-title     { color: var(--blue); }
 .build-android-title { color: var(--green); }
 
 .btn-build {
     width: 100%;
-    padding: 10px 16px;
-    font-size: 0.88rem;
-    border-radius: 8px;
+    padding: var(--s2) var(--s4);
+    font-size: var(--fs-sm);
+    min-height: 40px;
+    border-radius: var(--r-sm);
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 7px;
+    gap: var(--s2);
     cursor: pointer;
     transition: background 0.15s, border-color 0.15s;
     border: 1px solid transparent;
@@ -1356,6 +1521,7 @@ h2 {
     color: var(--blue);
 }
 .btn-build-ios:hover { background: var(--blue-hover); border-color: var(--blue-hover); color: var(--on-accent); }
+.btn-build-ios:active { filter: brightness(0.92); }
 
 .btn-build-android {
     background: var(--android-bg);
@@ -1366,6 +1532,7 @@ h2 {
     color: var(--android-text);
 }
 .btn-build-android:hover { background: var(--android-hover); border-color: var(--android-border); color: var(--android-text); }
+.btn-build-android:active { filter: brightness(0.92); }
 
 .btn-build-android-secondary {
     background: var(--bg2);
@@ -1373,29 +1540,32 @@ h2 {
     color: var(--android-text);
 }
 .btn-build-android-secondary:hover { background: var(--android-bg); border-color: var(--android-border); color: var(--android-text); }
+.btn-build-android-secondary:active { filter: brightness(0.92); }
 
-.build-log-scroll { max-height: 220px; }
+.build-log-scroll { max-height: 240px; }
 
 /* ------------------------------------------------------------------ */
 /* Language-tabbed Source Screenshots card                             */
 /* ------------------------------------------------------------------ */
 
-/* Remove default card padding so tab bar sits flush at the top */
+/* Card padding is removed only below the heading, so the tab bar can sit
+   flush against the card edge while the heading keeps the same inset every
+   other card's heading has. */
 .card-screenshots {
-    padding: 0;
+    padding: var(--s5) 0 0;
     overflow: visible;
     /* Must NOT set overflow:hidden or it clips the lang picker dropdown */
 }
-
-/* The generic .card sets no overflow, keep it that way */
+.card-screenshots > h2,
+.card-screenshots > .card-hint { padding: 0 var(--s5); }
 
 /* ── Tab bar ───────────────────────────────────────────────────────── */
 .lang-tab-bar {
     display: flex;
     align-items: stretch;
     gap: 0;
-    border-bottom: 1px solid var(--bg2);
-    padding: 0 4px;
+    border-bottom: 1px solid var(--border);
+    padding: 0 var(--s1);
     flex-wrap: wrap;
     /* NO overflow:auto — that would clip the dropdown */
     overflow: visible;
@@ -1403,22 +1573,22 @@ h2 {
        var(--text1), which goes dark in light mode — invisible against a
        bar that never stopped being black. */
     background: var(--bg1);
-    border-radius: 10px 10px 0 0;
 }
 
 /* Individual language tab */
 .lang-tab {
     display: flex;
     align-items: center;
-    gap: 5px;
-    padding: 10px 14px 10px 16px;
-    font-size: 0.84rem;
+    gap: var(--s1);
+    padding: var(--s2) var(--s3);
+    font-size: var(--fs-sm);
     color: var(--text3);
     cursor: pointer;
     border-bottom: 2px solid transparent;
     margin-bottom: -1px;
+    min-height: 40px;
     white-space: nowrap;
-    transition: color 0.12s, border-color 0.12s;
+    transition: color 0.15s, border-color 0.15s;
     user-select: none;
 }
 .lang-tab:hover { color: var(--text1); }
@@ -1435,44 +1605,42 @@ h2 {
 .lang-tab-remove {
     background: transparent;
     border: none;
-    color: var(--border);
-    font-size: 0.95rem;
+    color: var(--text4);
     line-height: 1;
-    padding: 0 2px;
+    padding: 0;
     cursor: pointer;
-    border-radius: 3px;
-    transition: color 0.12s, background 0.12s;
+    border-radius: var(--r-sm);
+    transition: color 0.15s, background 0.15s;
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 16px;
-    height: 16px;
+    width: 24px;
+    height: 24px;
     flex-shrink: 0;
 }
-.lang-tab-remove:hover { color: var(--red); background: rgba(248,113,113,0.12); }
+.lang-tab-remove:hover { color: var(--red); background: var(--red-wash); }
 
 /* ── + button & picker ─────────────────────────────────────────────── */
 .lang-tab-add-wrapper {
     position: relative;
     display: flex;
     align-items: center;
-    padding: 0 6px;
+    padding: 0 var(--s2);
 }
 
 .lang-tab-add {
     background: transparent;
     border: 1px solid transparent;
-    color: var(--border);
-    font-size: 1.1rem;
+    color: var(--text3);
     line-height: 1;
-    width: 26px;
-    height: 26px;
-    border-radius: 6px;
+    width: 32px;
+    height: 32px;
+    border-radius: var(--r-sm);
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: color 0.12s, background 0.12s, border-color 0.12s;
+    transition: color 0.15s, background 0.15s, border-color 0.15s;
 }
 .lang-tab-add:hover,
 .lang-tab-add-open {
@@ -1493,48 +1661,51 @@ h2 {
 /* Dropdown list */
 .lang-picker-dropdown {
     position: absolute;
-    top: calc(100% + 4px);
+    top: calc(100% + var(--s1));
     left: 0;
     z-index: 9999;
     background: var(--bg1);
     border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 5px;
+    border-radius: var(--r-md);
+    padding: var(--s1);
     min-width: 210px;
     max-height: 280px;
     overflow-y: auto;
-    box-shadow: 0 12px 40px rgba(0,0,0,0.7);
+    overscroll-behavior: contain;
+    box-shadow: var(--shadow-md);
 }
 
 .lang-picker-item {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: var(--s3);
     width: 100%;
     background: transparent;
     border: none;
-    border-radius: 5px;
-    padding: 7px 10px;
+    border-radius: var(--r-sm);
+    padding: var(--s2) var(--s3);
+    min-height: 34px;
     cursor: pointer;
-    transition: background 0.1s;
+    transition: background 0.15s;
     text-align: left;
 }
 .lang-picker-item:hover { background: var(--bg3); }
+.lang-picker-item:active { background: var(--bg2); }
 
 .lang-picker-name {
     color: var(--text1);
-    font-size: 0.84rem;
+    font-size: var(--fs-sm);
 }
 .lang-picker-code {
-    color: var(--border);
-    font-size: 0.72rem;
-    font-family: 'SF Mono', Monaco, monospace;
+    color: var(--text4);
+    font-size: var(--fs-xs);
 }
 .lang-picker-empty {
-    color: var(--border);
-    font-size: 0.78rem;
+    color: var(--text4);
+    font-size: var(--fs-sm);
     text-align: center;
-    padding: 10px 0;
+    padding: var(--s3) 0;
     margin: 0;
 }
 
@@ -1543,7 +1714,7 @@ h2 {
     display: flex;
     align-items: center;
     margin-left: auto;
-    padding: 0 14px;
+    padding: 0 var(--s4);
     flex-shrink: 0;
 }
 
@@ -1551,37 +1722,99 @@ h2 {
     display: flex;
     flex-direction: column;
     align-items: flex-end;
-    gap: 3px;
+    gap: var(--s1);
 }
 
 .lang-tab-images-row {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--s3);
 }
 
 .lang-tab-images-hint {
     color: var(--text3);
-    font-size: 0.7rem;
+    font-size: var(--fs-xs);
     margin: 0;
     white-space: nowrap;
 }
 
 .btn-sm {
-    padding: 5px 12px;
-    font-size: 0.8rem;
-    border-radius: 6px;
+    padding: var(--s1) var(--s3);
+    font-size: var(--fs-sm);
+    min-height: 30px;
+    border-radius: var(--r-sm);
 }
 
 /* Tab content area */
 .card-screenshots .source-list {
-    padding: 14px 20px;
+    padding: var(--s2) var(--s5) var(--s4);
+    margin-top: 0;
 }
 
 .source-empty {
-    color: var(--border);
-    font-size: 0.82rem;
-    padding: 24px 20px;
+    color: var(--text4);
+    font-size: var(--fs-sm);
+    padding: var(--s5);
     margin: 0;
     text-align: center;
 }
+
+/* ══════════════════════════════════════════════
+   RESPONSIVE
+
+   This ships to Android as well as the desktop, and had no media queries at
+   all: at 390px the five build-config columns crushed to ~65px each and the
+   hint text overlapped the next column.
+══════════════════════════════════════════════ */
+@media (max-width: 900px) {
+    .app-container { padding: var(--s5) var(--s4) var(--s6); }
+    .export-settings-grid { flex-direction: column; gap: var(--s5); }
+    .export-section + .export-section {
+        padding-left: 0;
+        padding-top: var(--s5);
+        border-left: none;
+        border-top: 1px solid var(--border2);
+    }
+    .lang-tab-bar-right { margin-left: 0; width: 100%; padding: var(--s2) var(--s4) var(--s3); }
+    .lang-tab-bar-right-inner { align-items: flex-start; width: 100%; min-width: 0; }
+    /* nowrap ran this past the card edge once the row was full-width */
+    .lang-tab-images-hint { white-space: normal; }
+}
+
+@media (max-width: 640px) {
+    .build-config-grid { grid-template-columns: 1fr; }
+    .generate-row { flex-direction: column; }
+    .build-buttons { flex-direction: column; gap: var(--s5); }
+    .picker-actions { flex-direction: column; }
+    .card { padding: var(--s4); border-radius: var(--r-md); }
+    .card-screenshots { padding: var(--s4) 0 0; }
+    .card-screenshots > h2,
+    .card-screenshots > .card-hint { padding: 0 var(--s4); }
+    .card-screenshots .source-list { padding: var(--s2) var(--s4) var(--s3); }
+    .settings-popup, .settings-popup-wide { width: auto; left: var(--s3); right: var(--s3); transform: translateY(-50%); padding: var(--s5); }
+    .settings-header { top: calc(var(--s5) * -1); margin-top: calc(var(--s5) * -1); padding-top: var(--s5); }
+    .output-tab-group-end { margin-left: 0; border-left: none; }
+    .subtitle { max-width: 100%; }
+    .header-row { margin-bottom: var(--s5); }
+}
+
+/* Touch pointers get the 44px target the pointer needs; mouse users keep the
+   compact chrome. */
+@media (pointer: coarse) {
+    .btn, .btn-sm, .platform-btn, .picker-open-btn, .theme-chip { min-height: 44px; }
+    .btn-icon, .btn-remove, .lang-tab-add, .btn-theme { width: 44px; height: 44px; min-height: 44px; }
+    .lang-tab-remove { width: 36px; height: 36px; }
+    .lang-tab { min-height: 48px; }
+    .output-tab { min-height: 48px; }
+    .lang-picker-item { min-height: 44px; }
+    .export-settings-card input[type="checkbox"],
+    .export-target-row input[type="checkbox"] { width: 20px; height: 20px; }
+    .export-target-row { min-height: 36px; }
+}
+
+/* The close mark inside a language tab is subordinate to the tab itself. */
+.lang-tab-remove .icon { width: 13px; height: 13px; }
+.btn-remove .icon { width: 14px; height: 14px; }
+.update-banner-dismiss .icon { width: 14px; height: 14px; }
+.btn-generate .icon,
+.btn-publish .icon { width: 17px; height: 17px; }

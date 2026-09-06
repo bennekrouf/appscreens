@@ -1263,7 +1263,15 @@ fn main() {
     let config = dioxus::desktop::Config::new()
         // Injected into index.html's <head> before first paint, so there is no
         // flash of unstyled content and no runtime asset lookup.
-        .with_custom_head(format!("<style>{MAIN_CSS}</style>"))
+        //
+        // The viewport meta goes in with it: without it the webview lays the
+        // page out in a 980px virtual viewport on Android, so every
+        // `@media (max-width: …)` rule in main.css silently never matches on
+        // the one platform that needs them.
+        .with_custom_head(format!(
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, viewport-fit=cover\">\
+             <style>{MAIN_CSS}</style>"
+        ))
         .with_window(
             WindowBuilder::new()
                 .with_title("AppScreens")
@@ -1353,6 +1361,60 @@ fn system_prefers_light() -> bool {
 fn system_prefers_light() -> bool {
     true
 }
+
+// ---------------------------------------------------------------------------
+// Icons
+//
+// These replaced the emoji that used to label buttons and tabs (🚀 Publish,
+// 🔨 Build, 📱 Build iOS IPA, 🐛 Build APK, …). Emoji render as full-colour
+// glyphs in an otherwise monochrome indigo UI, so they were the loudest thing
+// on screen while carrying no meaning, and they vary per platform — a 🐛 on a
+// build button reads as "report a bug". Stroke geometry on a 24×24 grid,
+// coloured by `currentColor` so each icon inherits whatever accent its control
+// already owns. Sizing and stroke live in `.icon` in main.css.
+// ---------------------------------------------------------------------------
+macro_rules! icon {
+    ($name:ident, $($d:expr),+ $(,)?) => {
+        fn $name() -> Element {
+            rsx! {
+                svg { class: "icon", view_box: "0 0 24 24", "aria-hidden": "true",
+                    $( path { d: $d } )+
+                }
+            }
+        }
+    };
+}
+
+icon!(icon_sparkle, "M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z");
+icon!(icon_image, "M4 4h16v16H4z", "M4 16l4.5-4.5 3 3 3.5-3.5L20 15");
+icon!(icon_upload, "M12 16V4", "M7 9l5-5 5 5", "M4 16v3a2 2 0 002 2h12a2 2 0 002-2v-3");
+icon!(
+    icon_wrench,
+    "M20.2 4.6a5.5 5.5 0 01-7.1 7.1L5.5 19.3a2 2 0 01-2.8-2.8l7.6-7.6a5.5 5.5 0 017.1-7.1l-3.3 3.3 2.8 2.8z"
+);
+icon!(icon_phone, "M6 2h12v20H6z", "M11 18.5h2");
+icon!(
+    icon_package,
+    "M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z",
+    "M3.3 7l8.7 5 8.7-5",
+    "M12 22V12",
+);
+icon!(icon_download, "M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4", "M7 10l5 5 5-5", "M12 15V3");
+icon!(icon_play, "M6 3l14 9-14 9z");
+icon!(icon_monitor, "M3 4h18v12H3z", "M8 20h8", "M12 16v4");
+icon!(
+    icon_alert,
+    "M10.3 3.9L2 18a2 2 0 001.7 3h16.6a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z",
+    "M12 9v4.5",
+    "M12 17.2h.01",
+);
+icon!(icon_close, "M18 6L6 18", "M6 6l12 12");
+icon!(icon_plus, "M12 5v14", "M5 12h14");
+icon!(icon_chevron_left, "M15 5l-7 7 7 7");
+icon!(icon_check, "M20 6L9 17l-5-5");
+icon!(icon_sun, "M12 4V2", "M12 22v-2", "M4 12H2", "M22 12h-2", "M5.6 5.6L4.2 4.2", "M19.8 19.8l-1.4-1.4", "M18.4 5.6l1.4-1.4", "M4.2 19.8l1.4-1.4", "M12 7.5a4.5 4.5 0 100 9 4.5 4.5 0 000-9z");
+icon!(icon_moon, "M20.5 13.3A8.5 8.5 0 1110.7 3.5a6.6 6.6 0 009.8 9.8z");
+icon!(icon_folder_plus, "M21 19a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h4.5l2 3H19a2 2 0 012 2z", "M12 11.5v5", "M9.5 14h5");
 
 #[component]
 fn App() -> Element {
@@ -1463,8 +1525,10 @@ fn App() -> Element {
                 }
                 button {
                     class: "update-banner-dismiss",
+                    title: "Dismiss",
+                    aria_label: "Dismiss update notice",
                     onclick: move |_| update_dismissed.set(true),
-                    "×"
+                    {icon_close()}
                 }
             }
         }
@@ -1473,6 +1537,7 @@ fn App() -> Element {
         button {
             class: "btn-theme",
             title: if *is_light.read() { "Switch to dark mode" } else { "Switch to light mode" },
+            aria_label: if *is_light.read() { "Switch to dark mode" } else { "Switch to light mode" },
             onclick: move |_| {
                 let next = !*is_light.read();
                 theme_overridden.set(true);
@@ -1482,7 +1547,7 @@ fn App() -> Element {
                     if next { "light" } else { "" }
                 ));
             },
-            if *is_light.read() { "🌙" } else { "☀" }
+            if *is_light.read() { {icon_moon()} } else { {icon_sun()} }
         }
 
         if project_dir.read().is_none() {
@@ -1613,20 +1678,36 @@ fn ProjectPicker(on_open: EventHandler<PathBuf>) -> Element {
         div { class: "picker-screen",
             div { class: "picker-inner",
                 div { class: "picker-logo",
-                    h1 { "AppScreens" }
-                    p { class: "picker-subtitle", "App Store & Play Store screenshot generator" }
+                    img {
+                        class: "picker-logo-mark",
+                        src: asset!("/assets/icon.png"),
+                        alt: "",
+                    }
+                    div {
+                        h1 { "AppScreens" }
+                        p { class: "picker-subtitle", "App Store & Play Store screenshot generator" }
+                    }
                 }
 
                 // ── Action buttons row ──────────────────────────────────────
                 div { class: "picker-actions",
                     button {
-                        class: "btn btn-primary picker-new-btn",
+                        // Only "New Project…" is primary. When this toggles to
+                        // "Cancel" it demotes to a plain button — the strongest
+                        // blue on the first screen should never be the dismiss.
+                        class: if *show_new.read() { "btn picker-new-btn" } else { "btn btn-primary picker-new-btn" },
                         onclick: move |_| {
                             let currently = *show_new.read();
                             show_new.set(!currently);
                             create_error.set(None);
                         },
-                        if *show_new.read() { "✕  Cancel" } else { "✦  New Project…" }
+                        if *show_new.read() {
+                            {icon_close()}
+                            "Cancel"
+                        } else {
+                            {icon_sparkle()}
+                            "New Project…"
+                        }
                     }
                     {open_existing_button(on_open.clone())}
                 }
@@ -1758,7 +1839,8 @@ fn ProjectPicker(on_open: EventHandler<PathBuf>) -> Element {
                                     }
                                 }
                             },
-                            "🚀  Create Project"
+                            {icon_folder_plus()}
+                            "Create Project"
                         }
                     }
                 }
@@ -2913,7 +2995,8 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                         class: "btn btn-icon btn-back",
                         onclick: move |_| on_close.call(()),
                         title: "Back to project picker",
-                        "‹"
+                        aria_label: "Back to project picker",
+                        {icon_chevron_left()}
                     }
                     div {
                         h1 { "{proj_name}" }
@@ -2924,8 +3007,9 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                     class: "btn btn-icon",
                     onclick: move |_| show_settings.toggle(),
                     title: "Settings",
+                    aria_label: "Settings",
                     svg {
-                        width: "20", height: "20", view_box: "0 0 20 20", fill: "currentColor",
+                        class: "icon icon-fill icon-lg", view_box: "0 0 20 20",
                         path { d: "M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" }
                     }
                 }
@@ -3062,12 +3146,13 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                                         button {
                                             class: "btn-remove",
                                             title: "Remove logo",
+                                            aria_label: "Remove logo",
                                             onclick: move |_| {
                                                 let mut p = proj.write();
                                                 p.logo_path = None;
                                                 save_project_state(&proj_dir_save, &p);
                                             },
-                                            "✕"
+                                            {icon_close()}
                                         }
                                     }
                                 }
@@ -3086,7 +3171,10 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                     if proj.read().platform_type.has_desktop() {
                         div { class: "export-section",
                             div { class: "export-platform-header",
-                                span { class: "export-platform-label", "🖥  Desktop" }
+                                span { class: "export-platform-label",
+                                    {icon_monitor()}
+                                    "Desktop"
+                                }
                             }
                             div { class: "export-targets",
                                 for (ti, &(_, tname, tw, th)) in DESKTOP_TARGETS.iter().enumerate() {
@@ -3322,9 +3410,12 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                 }
             }
 
-            // ---- 4. Source Screenshots ----
             // ---- 4. Source Screenshots (language-tabbed) ----
             div { class: "card card-screenshots",
+                h2 { "4. Source Screenshots" }
+                p { class: "hint card-hint",
+                    "One set of images per language. Give each screenshot a title and a short description."
+                }
                 // ── Tab bar ──────────────────────────────────────────────────
                 div { class: "lang-tab-bar",
                     // One tab per selected locale
@@ -3356,6 +3447,7 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                                         button {
                                             class: "lang-tab-remove",
                                             title: "Remove language",
+                                            aria_label: "Remove {display_name}",
                                             onclick: {
                                                 let loc3 = loc.clone();
                                                 move |e: MouseEvent| {
@@ -3374,7 +3466,7 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                                                     save_project_state(&proj_dir_save, &p);
                                                 }
                                             },
-                                            "×"
+                                            {icon_close()}
                                         }
                                     }
                                 }
@@ -3387,8 +3479,9 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                         button {
                             class: if *show_lang_picker.read() { "lang-tab-add lang-tab-add-open" } else { "lang-tab-add" },
                             title: "Add language",
+                            aria_label: "Add language",
                             onclick: move |_| show_lang_picker.toggle(),
-                            "+"
+                            {icon_plus()}
                         }
                         if *show_lang_picker.read() {
                             // Transparent full-screen backdrop — closes the picker on outside click
@@ -3483,7 +3576,11 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
 
                                 rsx! {
                                     div { class: "source-item",
-                                        img { class: "source-thumb", src: "{thumb_src}" }
+                                        img {
+                                            class: "source-thumb",
+                                            src: "{thumb_src}",
+                                            alt: "Source screenshot {idx + 1}",
+                                        }
                                         div { class: "source-item-right",
                                             div { class: "source-info",
                                                 span { class: "source-index", "{idx + 1}." }
@@ -3544,26 +3641,31 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                                                     }
                                                 }
                                             }
-                                            button {
-                                                class: "btn-remove",
-                                                title: "Remove image",
-                                                onclick: {
-                                                    let proj_dir_save = proj_dir_save.clone();
-                                                    move |_| {
-                                                        let mut p = proj.write();
-                                                        let cur_loc = active_locale_tab.read().clone();
-                                                        if let Some(srcs) = p.locale_sources.get_mut(&cur_loc) {
-                                                            if idx < srcs.len() { srcs.remove(idx); }
-                                                        }
-                                                        if idx < p.manual_texts.len() { p.manual_texts.remove(idx); }
-                                                        if let Some(v) = p.locale_texts.get_mut(&cur_loc) {
-                                                            if idx < v.len() { v.remove(idx); }
-                                                        }
-                                                        save_project_state(&proj_dir_save, &p);
+                                        }
+                                        // Sibling of .source-item-right, not its last
+                                        // child — as a child it was stranded on its own
+                                        // line at the far left, below and away from the
+                                        // row it removes.
+                                        button {
+                                            class: "btn-remove",
+                                            title: "Remove image",
+                                            aria_label: "Remove image {idx + 1}",
+                                            onclick: {
+                                                let proj_dir_save = proj_dir_save.clone();
+                                                move |_| {
+                                                    let mut p = proj.write();
+                                                    let cur_loc = active_locale_tab.read().clone();
+                                                    if let Some(srcs) = p.locale_sources.get_mut(&cur_loc) {
+                                                        if idx < srcs.len() { srcs.remove(idx); }
                                                     }
-                                                },
-                                                "✕"
-                                            }
+                                                    if idx < p.manual_texts.len() { p.manual_texts.remove(idx); }
+                                                    if let Some(v) = p.locale_texts.get_mut(&cur_loc) {
+                                                        if idx < v.len() { v.remove(idx); }
+                                                    }
+                                                    save_project_state(&proj_dir_save, &p);
+                                                }
+                                            },
+                                            {icon_close()}
                                         }
                                     }
                                 }
@@ -3631,7 +3733,8 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                         span { class: "spinner" }
                         " Generating AI…"
                     } else {
-                        "✦ Generate AI Screenshots"
+                        {icon_sparkle()}
+                        "Generate AI Screenshots"
                     }
                 }
                 button {
@@ -3642,15 +3745,19 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                         span { class: "spinner spinner-dark" }
                         " Generating…"
                     } else {
-                        "⬛ Generate Manual Screenshots"
+                        {icon_image()}
+                        "Generate Manual Screenshots"
                     }
                 }
             }
 
             // ---- Error banner ----
             if let AppPhase::Error(ref msg) = *phase.read() {
-                div { class: "card error-card",
-                    p { "⚠ {msg}" }
+                div { class: "card error-card", role: "alert",
+                    p {
+                        {icon_alert()}
+                        "{msg}"
+                    }
                     button {
                         class: "btn btn-dismiss",
                         onclick: move |_| phase.set(AppPhase::Idle),
@@ -3688,14 +3795,19 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                         }
                     }
                     button {
-                        class: if *output_tab.read() == OutputTab::Publish { "output-tab active output-tab-publish" } else { "output-tab output-tab-publish" },
+                        // Publish and Build are operations, not views of
+                        // output — the group-end rule separates them from the
+                        // three result tabs while keeping one active signal.
+                        class: if *output_tab.read() == OutputTab::Publish { "output-tab active output-tab-publish output-tab-group-end" } else { "output-tab output-tab-publish output-tab-group-end" },
                         onclick: move |_| output_tab.set(OutputTab::Publish),
-                        "🚀 Publish"
+                        {icon_upload()}
+                        "Publish"
                     }
                     button {
                         class: if *output_tab.read() == OutputTab::Build { "output-tab active output-tab-build" } else { "output-tab output-tab-build" },
                         onclick: move |_| output_tab.set(OutputTab::Build),
-                        "🔨 Build"
+                        {icon_wrench()}
+                        "Build"
                         if matches!(*build_phase.read(), BuildPhase::Running(_)) {
                             span { class: "spinner spinner-dark" }
                         }
@@ -3727,7 +3839,7 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                                             rsx! {
                                                 div { class: "preview-item",
                                                     p { class: "preview-label", "Screen {i + 1}" }
-                                                    img { class: "preview-img", src: "{url}" }
+                                                    img { class: "preview-img", src: "{url}", alt: "Generated screenshot {i + 1}" }
                                                 }
                                             }
                                         }
@@ -3774,10 +3886,16 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                                                 span { class: "publish-status publish-running", " Uploading…" }
                                             },
                                             PublishPhase::Success => rsx! {
-                                                span { class: "publish-status publish-success", "✓ Uploaded successfully" }
+                                                span { class: "publish-status publish-success",
+                                                    {icon_check()}
+                                                    "Uploaded successfully"
+                                                }
                                             },
                                             PublishPhase::Error(ref msg) => rsx! {
-                                                span { class: "publish-status publish-error", "✕ {msg}" }
+                                                span { class: "publish-status publish-error",
+                                                    {icon_alert()}
+                                                    "{msg}"
+                                                }
                                             },
                                         }
                                     }
@@ -3792,7 +3910,8 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                                         span { class: "spinner" }
                                         " Uploading to App Store Connect…"
                                     } else {
-                                        "🚀 Upload to App Store Connect"
+                                        {icon_upload()}
+                                        "Upload to App Store Connect"
                                     }
                                 }
 
@@ -3841,10 +3960,16 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                                                 span { class: "publish-status publish-running", " Uploading…" }
                                             },
                                             AndroidPublishPhase::Success => rsx! {
-                                                span { class: "publish-status publish-success", "✓ Uploaded successfully" }
+                                                span { class: "publish-status publish-success",
+                                                    {icon_check()}
+                                                    "Uploaded successfully"
+                                                }
                                             },
                                             AndroidPublishPhase::Error(ref msg) => rsx! {
-                                                span { class: "publish-status publish-error", "✕ {msg}" }
+                                                span { class: "publish-status publish-error",
+                                                    {icon_alert()}
+                                                    "{msg}"
+                                                }
                                             },
                                         }
                                     }
@@ -3857,7 +3982,8 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                                         span { class: "spinner" }
                                         " Uploading to Google Play…"
                                     } else {
-                                        "🤖 Upload to Google Play"
+                                        {icon_play()}
+                                        "Upload to Google Play"
                                     }
                                 }
                                 if !android_publish_log.read().is_empty() {
@@ -3895,10 +4021,16 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                                             span { class: "build-status build-running", " Running {name}…" }
                                         },
                                         BuildPhase::Success(ref name) => rsx! {
-                                            span { class: "build-status build-success", "✓ {name} completed successfully" }
+                                            span { class: "build-status build-success",
+                                                {icon_check()}
+                                                "{name} completed successfully"
+                                            }
                                         },
                                         BuildPhase::Error(ref msg) => rsx! {
-                                            span { class: "build-status build-error", "✕ {msg}" }
+                                            span { class: "build-status build-error",
+                                                {icon_alert()}
+                                                "{msg}"
+                                            }
                                         },
                                     }
                                 }
@@ -3919,7 +4051,8 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                                                 span { class: "spinner" }
                                                 " Building IPA…"
                                             } else {
-                                                "📱 Build iOS IPA"
+                                                {icon_phone()}
+                                                "Build iOS IPA"
                                             }
                                         }
                                     }
@@ -3938,7 +4071,8 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                                                 span { class: "spinner" }
                                                 " Building AAB…"
                                             } else {
-                                                "📦 Build AAB (Google Play)"
+                                                {icon_package()}
+                                                "Build AAB (Google Play)"
                                             }
                                         }
                                         button {
@@ -3952,7 +4086,8 @@ fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
                                                 span { class: "spinner spinner-dark" }
                                                 " Building…"
                                             } else {
-                                                "🐛 Build APK (Test Device)"
+                                                {icon_download()}
+                                                "Build APK (Test Device)"
                                             }
                                         }
                                     }
@@ -4110,10 +4245,33 @@ fn SettingsPopup(on_close: EventHandler<()>) -> Element {
 
     rsx! {
         div { class: "settings-backdrop", onclick: move |_| on_close.call(()) }
-        div { class: "settings-popup settings-popup-wide",
+        div {
+            class: "settings-popup settings-popup-wide",
+            role: "dialog",
+            aria_modal: "true",
+            aria_label: "Settings",
+            // Esc closes it. Backdrop-click was the only way out before, which
+            // was the sole escape whenever the window was short enough to push
+            // the close button off-screen.
+            tabindex: "-1",
+            onmounted: move |e: Event<MountedData>| {
+                spawn(async move { let _ = e.set_focus(true).await; });
+            },
+            onkeydown: move |e: KeyboardEvent| {
+                if e.key() == Key::Escape {
+                    e.stop_propagation();
+                    on_close.call(());
+                }
+            },
             div { class: "settings-header",
                 h2 { "Settings" }
-                button { class: "btn btn-icon", onclick: move |_| on_close.call(()), "✕" }
+                button {
+                    class: "btn btn-icon",
+                    title: "Close settings",
+                    aria_label: "Close settings",
+                    onclick: move |_| on_close.call(()),
+                    {icon_close()}
+                }
             }
 
             // ---- Screenshot Generation ----
