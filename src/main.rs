@@ -1659,9 +1659,9 @@ fn ProjectPicker(on_open: EventHandler<PathBuf>) -> Element {
     // project lives under one fixed, app-private root, so this is never
     // empty and the "Location" field below doesn't render.
     #[cfg(not(target_os = "android"))]
-    let mut new_parent = use_signal(|| Option::<PathBuf>::None);
+    let new_parent = use_signal(|| Option::<PathBuf>::None);
     #[cfg(target_os = "android")]
-    let mut new_parent = use_signal(|| Some(android_saf::app_private_projects_root()));
+    let new_parent = use_signal(|| Some(android_saf::app_private_projects_root()));
     let mut create_error = use_signal(|| Option::<String>::None);
 
     // Derive slug and bundle from name automatically (user can override)
