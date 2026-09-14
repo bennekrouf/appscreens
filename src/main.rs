@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 mod update_check;
+mod notice;
 #[cfg(target_os = "android")]
 mod android_saf;
 
@@ -1452,6 +1453,17 @@ fn App() -> Element {
     // ── Auto-update check ──────────────────────────────────────────────────
     // Background fetch latest.json from GitHub releases on startup; if a newer
     // version is published, surface a small banner. Dismissable per session.
+    // ── Notice from mayorana.ch ────────────────────────────────────────────
+    // A message to the people running this build (see notice.rs). Same
+    // posture as the update check: delayed, best-effort, silent on failure.
+    let mut mayorana_notice = use_signal(|| Option::<notice::Notice>::None);
+    use_coroutine(move |_rx: dioxus::prelude::UnboundedReceiver<()>| async move {
+        tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+        if let Some(n) = notice::fetch().await {
+            mayorana_notice.set(Some(n));
+        }
+    });
+
     let mut update_info       = use_signal(|| Option::<update_check::UpdateInfo>::None);
     let mut update_dismissed  = use_signal(|| false);
 
@@ -1529,6 +1541,35 @@ fn App() -> Element {
                     aria_label: "Dismiss update notice",
                     onclick: move |_| update_dismissed.set(true),
                     {icon_close()}
+                }
+            }
+        }
+
+        // Notice from mayorana.ch — shown until dismissed, then remembered.
+        if let Some(n) = mayorana_notice.read().clone() {
+            {
+                let id = n.id.clone();
+                let link_text = n.link_text.clone().unwrap_or_else(|| "Open".to_string());
+                rsx! {
+                    div { class: "update-banner notice-banner",
+                        span { class: "update-banner-text", "{n.text}" }
+                        if let Some(url) = n.url.clone() {
+                            a {
+                                class: "update-banner-link",
+                                href: "{url}",
+                                target: "_blank",
+                                "{link_text}"
+                            }
+                        }
+                        button {
+                            class: "update-banner-dismiss",
+                            onclick: move |_| {
+                                notice::dismiss(&id);
+                                mayorana_notice.set(None);
+                            },
+                            "×"
+                        }
+                    }
                 }
             }
         }
