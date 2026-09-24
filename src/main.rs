@@ -11,6 +11,9 @@ use std::path::PathBuf;
 
 mod update_check;
 mod notice;
+mod workspace;
+
+use workspace::ProjectView;
 #[cfg(target_os = "android")]
 mod android_saf;
 
@@ -279,7 +282,80 @@ struct ProjectState {
     /// One bool per DESKTOP_TARGETS entry (all enabled by default)
     #[serde(default = "default_desktop_targets")]
     desktop_targets: Vec<bool>,
+    // Release numbering (per project). Empty/0 means "not seeded yet" — the
+    // workspace seeds them on open from the old sources (global setting,
+    // build_number.txt, Dioxus.toml) so numbers never go backwards.
+    /// Marketing version, e.g. "1.2.0" (CFBundleShortVersionString / versionName)
+    #[serde(default)]
+    version: String,
+    /// Build number the next iOS build will use (CFBundleVersion)
+    #[serde(default)]
+    ios_build_number: u32,
+    /// versionCode the next Android release build will use
+    #[serde(default)]
+    android_version_code: u32,
+    /// Bump the build number after each successful release build
+    #[serde(default = "default_true")]
+    auto_increment_build: bool,
+    /// Provisioning profile for this app (profiles are per bundle ID)
+    #[serde(default)]
+    provisioning_profile: String,
+    // Store listing text and release settings
+    /// Per-locale store text: locale code → texts
+    #[serde(default)]
+    store_texts: std::collections::HashMap<String, StoreText>,
+    /// Support URL sent with every App Store localization (required for review)
+    #[serde(default)]
+    support_url: String,
+    /// App uses only exempt encryption (HTTPS etc.) — answers export compliance
+    #[serde(default)]
+    exempt_encryption: bool,
+    /// Google Play track releases go to: internal / alpha / beta / production
+    #[serde(default = "default_play_track")]
+    play_track: String,
+    /// Google Play release status: draft / completed
+    #[serde(default = "default_play_status")]
+    play_release_status: String,
+    /// What was shipped, newest first
+    #[serde(default)]
+    releases: Vec<ReleaseRecord>,
 }
+
+/// Store text for one locale. Limits are the stores' own.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+struct StoreText {
+    /// Both stores (4000)
+    #[serde(default)]
+    description: String,
+    /// App Store keywords, comma-separated (100)
+    #[serde(default)]
+    keywords: String,
+    /// App Store promotional text (170)
+    #[serde(default)]
+    promo_text: String,
+    /// "What's new" — App Store (4000) and Play release notes (500)
+    #[serde(default)]
+    whats_new: String,
+    /// Google Play short description (80)
+    #[serde(default)]
+    short_description: String,
+}
+
+/// One step of shipping a release, for the Submit step's history.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct ReleaseRecord {
+    /// UTC, "YYYY-MM-DD HH:MM"
+    at: String,
+    /// "ios" / "android"
+    platform: String,
+    version: String,
+    build: u32,
+    /// e.g. "Uploaded build", "Submitted for review", "Released to internal (draft)"
+    action: String,
+}
+
+fn default_play_track() -> String { "internal".to_string() }
+fn default_play_status() -> String { "draft".to_string() }
 
 fn default_true() -> bool { true }
 fn default_locale() -> String { "en-US".to_string() }
@@ -300,6 +376,9 @@ impl ProjectState {
             ios_targets: default_ios_targets(),
             android_targets: default_android_targets(),
             desktop_targets: default_desktop_targets(),
+            auto_increment_build: true,
+            play_track: default_play_track(),
+            play_release_status: default_play_status(),
             ..Default::default()
         }
     }
@@ -430,6 +509,7 @@ fn script_ios_distribution(
     identity: &str,
     profile_path: &str,
     short_version: &str,
+    build_number: u32,
 ) -> String {
     format!(r##"#!/bin/bash
 
@@ -601,16 +681,9 @@ sed -i '' '/^$/d' "$PLIST_PATH"
 plutil -replace CFBundleIdentifier -string "$BUNDLE_ID" "$PLIST_PATH"
 plutil -replace CFBundleDisplayName -string "{app_name}" "$PLIST_PATH"
 
-# Auto-increment Build Number
-BUILD_NUMBER_FILE="build_number.txt"
-if [ ! -f "$BUILD_NUMBER_FILE" ]; then
-  echo "2" >"$BUILD_NUMBER_FILE"
-fi
-
-BUILD_NUMBER=$(cat "$BUILD_NUMBER_FILE")
-BUILD_NUMBER=$((BUILD_NUMBER + 1))
-echo "$BUILD_NUMBER" >"$BUILD_NUMBER_FILE"
-echo "   Incrementing Build Number to: $BUILD_NUMBER"
+# Build Number — owned by AppScreens (Version step), injected per build
+BUILD_NUMBER="{build_number}"
+echo "   Version {short_version} ($BUILD_NUMBER)"
 
 plutil -replace CFBundleVersion -string "$BUILD_NUMBER" "$PLIST_PATH"
 plutil -replace CFBundleShortVersionString -string "{short_version}" "$PLIST_PATH"
@@ -735,7 +808,13 @@ open -R "./$APP_NAME.ipa"
 "##)
 }
 
-fn script_android_release(app_name: &str, project_slug: &str, bundle_id: &str) -> String {
+fn script_android_release(
+    app_name: &str,
+    project_slug: &str,
+    bundle_id: &str,
+    version_name: &str,
+    version_code: u32,
+) -> String {
     // Generate right keystore config based on project_slug
     let slug_lower = project_slug.to_lowercase();
     let is_abjad = slug_lower == "abjad";
@@ -818,13 +897,12 @@ BUILD_GRADLE="$BUILD_DIR/app/build.gradle.kts"
 OLD_PACKAGE="{old_package}"
 NEW_PACKAGE="{android_package}"
 
-# Extract version info and auto-increment
-V_CODE=$(grep "version_code" Dioxus.toml | awk -F'=' '{{print $2}}' | tr -d ' ')
-V_CODE=$((V_CODE + 1)) 
+# Version info — owned by AppScreens (Version step), injected per build.
+# Mirrored into Dioxus.toml so the project's own config stays in step.
+V_CODE={version_code}
+V_NAME="{version_name}"
 sed -i '' "s/version_code *= *[0-9]*/version_code = $V_CODE/g" Dioxus.toml
-echo "🚀 Auto-incremented version_code to $V_CODE in Dioxus.toml"
-
-V_NAME=$(grep "version_name" Dioxus.toml | awk -F'=' '{{print $2}}' | tr -d ' "')
+sed -i '' "s/version_name *= *\".*\"/version_name = \"$V_NAME\"/g" Dioxus.toml
 
 echo "   Package: $NEW_PACKAGE"
 echo "   Version: $V_NAME ($V_CODE)"
@@ -1083,16 +1161,18 @@ fn ensure_build_scripts(
     android_bundle_id: &str,
     identity: &str,
     provisioning_profile: &str,
-    short_version: &str,
+    version: &str,
+    ios_build_number: u32,
+    android_version_code: u32,
 ) -> Vec<String> {
     let scripts: &[(&str, String)] = &[
         (
             "build_ios_distribution.sh",
-            script_ios_distribution(app_name, project_slug, ios_bundle_id, identity, provisioning_profile, short_version),
+            script_ios_distribution(app_name, project_slug, ios_bundle_id, identity, provisioning_profile, version, ios_build_number),
         ),
         (
             "build_android_release.sh",
-            script_android_release(app_name, project_slug, android_bundle_id),
+            script_android_release(app_name, project_slug, android_bundle_id, version, android_version_code),
         ),
         (
             "build_android.sh",
@@ -1216,16 +1296,6 @@ enum AppPhase {
     Resizing,
     Done,
     Error(String),
-}
-
-// Bottom-panel tab
-#[derive(Clone, Debug, PartialEq)]
-enum OutputTab {
-    Progress,
-    GeneratedImages,
-    SavedScreenshots,
-    Publish,
-    Build,
 }
 
 // Build script phase
@@ -1389,10 +1459,6 @@ macro_rules! icon {
 icon!(icon_sparkle, "M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z");
 icon!(icon_image, "M4 4h16v16H4z", "M4 16l4.5-4.5 3 3 3.5-3.5L20 15");
 icon!(icon_upload, "M12 16V4", "M7 9l5-5 5 5", "M4 16v3a2 2 0 002 2h12a2 2 0 002-2v-3");
-icon!(
-    icon_wrench,
-    "M20.2 4.6a5.5 5.5 0 01-7.1 7.1L5.5 19.3a2 2 0 01-2.8-2.8l7.6-7.6a5.5 5.5 0 017.1-7.1l-3.3 3.3 2.8 2.8z"
-);
 icon!(icon_phone, "M6 2h12v20H6z", "M11 18.5h2");
 icon!(
     icon_package,
@@ -1412,6 +1478,7 @@ icon!(
 icon!(icon_close, "M18 6L6 18", "M6 6l12 12");
 icon!(icon_plus, "M12 5v14", "M5 12h14");
 icon!(icon_chevron_left, "M15 5l-7 7 7 7");
+icon!(icon_chevron_right, "M9 5l7 7-7 7");
 icon!(icon_check, "M20 6L9 17l-5-5");
 icon!(icon_sun, "M12 4V2", "M12 22v-2", "M4 12H2", "M22 12h-2", "M5.6 5.6L4.2 4.2", "M19.8 19.8l-1.4-1.4", "M18.4 5.6l1.4-1.4", "M4.2 19.8l1.4-1.4", "M12 7.5a4.5 4.5 0 100 9 4.5 4.5 0 000-9z");
 icon!(icon_moon, "M20.5 13.3A8.5 8.5 0 1110.7 3.5a6.6 6.6 0 009.8 9.8z");
@@ -1917,2284 +1984,6 @@ fn ProjectPicker(on_open: EventHandler<PathBuf>) -> Element {
 }
 
 // ---------------------------------------------------------------------------
-// Project View (main workspace)
-// ---------------------------------------------------------------------------
-#[component]
-fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> Element {
-    let settings = use_context::<Signal<Settings>>();
-
-    // Per-project persistent state
-    let mut proj = use_signal(|| load_project_state(&project_dir));
-
-    // Derived: fastlane ios screenshots path lives inside the project
-    let fastlane_path = project_dir.join("fastlane").join("screenshots").join("ios");
-
-    let mut phase = use_signal(|| AppPhase::Idle);
-    let mut log_lines = use_signal(|| Vec::<String>::new());
-    let mut show_settings = use_signal(|| false);
-    let mut output_tab = use_signal(|| OutputTab::Progress);
-    // Active locale tab shown in the Source Screenshots card for editing per-locale texts
-    let mut active_locale_tab: Signal<String> = use_signal(|| {
-        load_project_state(&project_dir).locales.first().cloned().unwrap_or_else(|| "en-US".to_string())
-    });
-    // Whether the "add language" picker dropdown is open
-    let mut show_lang_picker = use_signal(|| false);
-
-    // Lock body scroll whenever the settings popup is open
-    use_effect(move || {
-        let locked = *show_settings.read();
-        let js = if locked {
-            "document.body.style.overflow = 'hidden';"
-        } else {
-            "document.body.style.overflow = '';"
-        };
-        spawn(async move { document::eval(js).await.ok(); });
-    });
-    let mut publish_phase = use_signal(|| PublishPhase::Idle);
-    let mut publish_log = use_signal(|| Vec::<String>::new());
-    let mut android_publish_phase = use_signal(|| AndroidPublishPhase::Idle);
-    let mut android_publish_log = use_signal(|| Vec::<String>::new());
-    let mut build_phase = use_signal(|| BuildPhase::Idle);
-    let mut build_log = use_signal(|| Vec::<String>::new());
-
-    // Auto-scroll logs to bottom whenever they update
-    use_effect(move || {
-        let _ = log_lines.read().len();
-        let _ = build_log.read().len();
-        let _ = publish_log.read().len();
-        let _ = android_publish_log.read().len();
-        
-        let js = r#"
-            setTimeout(() => {
-                let els = document.querySelectorAll('.log-scroll');
-                for (let el of els) {
-                    el.scrollTop = el.scrollHeight;
-                }
-            }, 50);
-        "#;
-        spawn(async move { document::eval(js).await.ok(); });
-    });
-
-    let proj_dir = project_dir.clone();
-    let proj_dir2 = project_dir.clone();
-    let proj_dir3 = project_dir.clone();
-    let proj_dir4 = project_dir.clone();
-    let proj_dir5 = project_dir.clone();
-    let proj_dir6 = project_dir.clone();
-
-    // Helper: save project state
-    let _save_proj = {
-        let proj_dir = project_dir.clone();
-        move || save_project_state(&proj_dir, &proj.read())
-    };
-
-    // Helper: push log line
-    let mut add_log = move |msg: String| {
-        log_lines.write().push(msg);
-    };
-
-    // ---- Logo picker ----
-    #[cfg(not(target_os = "android"))]
-    let pick_logo = move |_| {
-        let proj_dir = proj_dir3.clone();
-        spawn(async move {
-            let file = rfd::AsyncFileDialog::new()
-                .set_title("Choose App Logo")
-                .add_filter("Images", &["png", "jpg", "jpeg"])
-                .pick_file()
-                .await;
-            if let Some(selected) = file {
-                let src = selected.path().to_path_buf();
-                // Copy the logo into assets/ inside the project so it survives
-                // the original file being moved or deleted later.
-                let assets_dir = proj_dir.join("assets");
-                let logo_path = if let Some(fname) = src.file_name() {
-                    let dest = assets_dir.join(fname);
-                    let _ = tokio::fs::create_dir_all(&assets_dir).await;
-                    match tokio::fs::copy(&src, &dest).await {
-                        Ok(_) => dest,         // use the stable local copy
-                        Err(_) => src.clone(), // fallback: use original path
-                    }
-                } else {
-                    src.clone()
-                };
-                let mut p = proj.write();
-                p.logo_path = Some(logo_path);
-                save_project_state(&proj_dir, &p);
-            }
-        });
-    };
-    // rfd has no Android backend (see src/android_saf.rs) — the picker there
-    // hands back bytes directly rather than a path, so this copies from bytes
-    // instead of from a source file, but lands in the same place.
-    #[cfg(target_os = "android")]
-    let pick_logo = move |_| {
-        let proj_dir = proj_dir3.clone();
-        spawn(async move {
-            if let Some((fname, bytes)) = android_saf::pick_images(false).await.into_iter().next() {
-                let assets_dir = proj_dir.join("assets");
-                let _ = tokio::fs::create_dir_all(&assets_dir).await;
-                let dest = assets_dir.join(&fname);
-                if tokio::fs::write(&dest, &bytes).await.is_ok() {
-                    let mut p = proj.write();
-                    p.logo_path = Some(dest);
-                    save_project_state(&proj_dir, &p);
-                }
-            }
-        });
-    };
-
-    // ---- Publish to App Store Connect via fastlane ----
-    let mut on_publish = {
-        let proj_dir = proj_dir4.clone();
-        move |_| {
-            publish_phase.set(PublishPhase::Running);
-            publish_log.set(Vec::new());
-            output_tab.set(OutputTab::Publish);
-
-            // Snapshot project state needed inside the async block.
-            let bundle_id    = proj.read().ios_bundle_id.clone(); // ASC lookup uses iOS bundle ID
-            let locales      = proj.read().locales.clone();
-            let output_paths = proj.read().output_paths.clone();
-            let app_name     = proj.read().app_name.clone();
-            let ios_version  = { let v = settings.read().ios_short_version.clone(); if v.is_empty() { "1.0".to_string() } else { v } };
-            let proj_dir     = proj_dir.clone();
-            let fastlane_ios = proj_dir.join("fastlane").join("screenshots").join("ios");
-
-            spawn(async move {
-                let mut log = publish_log.clone();
-                let mut push = |msg: &str| log.write().push(msg.to_string());
-
-                // ── 1. Load credentials ───────────────────────────────────────
-                let env = load_env(&[
-                    proj_dir.join(".env"),
-                    proj_dir.join("fastlane").join(".env"),
-                ]);
-                let resolve = |key: &str| -> Option<String> {
-                    env.get(key).cloned()
-                        .or_else(|| std::env::var(key).ok())
-                        .filter(|v| !v.is_empty())
-                };
-                let key_id = match resolve("APP_STORE_CONNECT_API_KEY_KEY_ID") {
-                    Some(v) => v,
-                    None => { publish_phase.set(PublishPhase::Error("Missing APP_STORE_CONNECT_API_KEY_KEY_ID in .env".into())); return; }
-                };
-                let issuer_id = match resolve("APP_STORE_CONNECT_API_KEY_ISSUER_ID") {
-                    Some(v) => v,
-                    None => { publish_phase.set(PublishPhase::Error("Missing APP_STORE_CONNECT_API_KEY_ISSUER_ID in .env".into())); return; }
-                };
-                let key_path = match resolve("APP_STORE_CONNECT_API_KEY_KEY_FILEPATH") {
-                    Some(v) => v,
-                    None => { publish_phase.set(PublishPhase::Error("Missing APP_STORE_CONNECT_API_KEY_KEY_FILEPATH in .env".into())); return; }
-                };
-                let p8_pem = match tokio::fs::read_to_string(&key_path).await {
-                    Ok(s) => s,
-                    Err(e) => { publish_phase.set(PublishPhase::Error(format!("Cannot read .p8 key at {key_path}: {e}"))); return; }
-                };
-
-                // ── 2. Mint App Store Connect JWT ─────────────────────────────
-                push("🔑 Authenticating with App Store Connect…");
-                let jwt = match asc_mint_jwt(&key_id, &issuer_id, &p8_pem) {
-                    Ok(t) => t,
-                    Err(e) => { publish_phase.set(PublishPhase::Error(format!("JWT error: {e}"))); return; }
-                };
-                push("✅ Authenticated");
-
-                // ── 3. Find the app by bundle ID ──────────────────────────────
-                push(&format!("🔍 Looking up app: {bundle_id}"));
-                let app_id = match asc_find_app(&jwt, &bundle_id).await {
-                    Ok(id) => id,
-                    Err(e) => { publish_phase.set(PublishPhase::Error(format!("App lookup failed: {e}"))); return; }
-                };
-                push(&format!("   App ID: {app_id}"));
-
-                // ── 4. Find or create the latest editable version ─────────────
-                push("🔍 Finding (or creating) app version…");
-                let version_id = match asc_find_or_create_version(&jwt, &app_id, &ios_version).await {
-                    Ok(id) => id,
-                    Err(e) => { publish_phase.set(PublishPhase::Error(format!("Version lookup failed: {e}"))); return; }
-                };
-                push(&format!("   Version ID: {version_id}"));
-
-                // ── 5. Get localizations for this version ─────────────────────
-                push("🌐 Fetching localizations…");
-                let loc_map = match asc_get_localizations(&jwt, &version_id).await {
-                    Ok(m) => m,
-                    Err(e) => { publish_phase.set(PublishPhase::Error(format!("Localization fetch failed: {e}"))); return; }
-                };
-                push(&format!("   Found localizations: {}", loc_map.keys().cloned().collect::<Vec<_>>().join(", ")));
-
-                // ── 5b. Ensure every localization has the correct app name ─────
-                if !app_name.is_empty() {
-                    push(&format!("✏️  Setting app name to \"{app_name}\" on all localizations…"));
-                    for (locale, loc_id) in &loc_map {
-                        if let Err(e) = asc_set_localization_name(&jwt, loc_id, &app_name).await {
-                            push(&format!("   ⚠️  Could not set name for {locale}: {e}"));
-                        }
-                    }
-                }
-
-                // ── 6. For each locale × device type: upload screenshots ──────
-                // Map IOS_TARGETS device folder names to ASC screenshotDisplayType values.
-                // https://developer.apple.com/documentation/appstoreconnectapi/screenshotdisplaytype
-                let device_types: &[(&str, &str)] = &[
-                    ("iPhone 6.9\" Display", "APP_IPHONE_69"),
-                    ("iPhone 6.7\" Display", "APP_IPHONE_67"),
-                    ("iPhone 6.5\" Display", "APP_IPHONE_65"),
-                    ("iPad Pro (12.9-inch)", "APP_IPAD_PRO_3GEN_129"),
-                ];
-
-                let upload_locales: Vec<String> = if locales.is_empty() {
-                    vec!["en-US".to_string()]
-                } else {
-                    locales.clone()
-                };
-
-                for locale in &upload_locales {
-                    let loc_id = match loc_map.get(locale.as_str()) {
-                        Some(id) => id.clone(),
-                        None => {
-                            push(&format!("⚠️  No localization found for {locale} — skipping (create it in App Store Connect first)"));
-                            continue;
-                        }
-                    };
-                    push(&format!("─── Locale: {locale} (loc_id: {loc_id}) ───"));
-
-                    for (device_name, display_type) in device_types {
-                        // Collect screenshot files for this locale + device from output_paths,
-                        // then fall back to the fastlane screenshots folder.
-                        let mut files: Vec<PathBuf> = output_paths.iter()
-                            .filter(|(label, path)| {
-                                label.contains(device_name) && label.contains(locale.as_str()) && path.exists()
-                            })
-                            .map(|(_, p)| p.clone())
-                            .collect();
-
-                        if files.is_empty() {
-                            // Fallback: fastlane/screenshots/ios/<locale>/<device_name>-*.png
-                            let dir = fastlane_ios.join(locale);
-                            if dir.exists() {
-                                if let Ok(entries) = std::fs::read_dir(&dir) {
-                                    let mut found: Vec<PathBuf> = entries
-                                        .flatten()
-                                        .map(|e| e.path())
-                                        .filter(|p| {
-                                            p.file_name()
-                                                .and_then(|n| n.to_str())
-                                                .map(|n| n.starts_with(device_name) && n.ends_with(".png"))
-                                                .unwrap_or(false)
-                                        })
-                                        .collect();
-                                    found.sort();
-                                    files = found;
-                                }
-                            }
-                        }
-
-                        if files.is_empty() {
-                            push(&format!("   ⏭  No files for {device_name} [{locale}] — skipping"));
-                            continue;
-                        }
-
-                        push(&format!("   📱 {device_name} — {} screenshot(s)", files.len()));
-
-                        // Get or create screenshot set for this localization + display type.
-                        let set_id = match asc_get_or_create_screenshot_set(&jwt, &loc_id, display_type).await {
-                            Ok(id) => id,
-                            Err(e) => {
-                                publish_phase.set(PublishPhase::Error(format!("[{locale}] {device_name}: screenshot set error: {e}")));
-                                return;
-                            }
-                        };
-
-                        // Delete existing screenshots in the set before uploading fresh ones.
-                        if let Err(e) = asc_delete_all_screenshots_in_set(&jwt, &set_id).await {
-                            push(&format!("   ⚠️  Could not clear existing screenshots: {e}"));
-                        }
-
-                        // Upload each file.
-                        for path in &files {
-                            let fname = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                            push(&format!("   ⬆  {fname}…"));
-                            match asc_upload_screenshot(&jwt, &set_id, path).await {
-                                Ok(_) => push(&format!("   ✅ {fname}")),
-                                Err(e) => {
-                                    publish_phase.set(PublishPhase::Error(format!("[{locale}] {device_name} {fname}: {e}")));
-                                    return;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                push("🎉 iOS screenshots uploaded to App Store Connect successfully!");
-                publish_phase.set(PublishPhase::Success);
-            });
-        }
-    };
-
-    // ---- Publish Android screenshots to Google Play via androidpublisher v3 ----
-    let mut on_android_publish = {
-        let proj_dir = proj_dir6.clone();
-        move |_| {
-            android_publish_phase.set(AndroidPublishPhase::Running);
-            android_publish_log.set(Vec::new());
-            output_tab.set(OutputTab::Publish);
-
-            // Snapshot what we need from project state before moving into async.
-            let bundle_id = proj.read().android_bundle_id.clone(); // Google Play uses Android package name
-            let output_paths = proj.read().output_paths.clone();
-
-            let proj_dir = proj_dir.clone();
-            spawn(async move {
-                let mut log = android_publish_log.clone();
-                let mut push = |msg: &str| log.write().push(msg.to_string());
-
-                // ── 1. Resolve env vars ──────────────────────────────────────
-                // Load from AppScreens binary dir and project dir (project wins).
-                let env = load_env(&[
-                    proj_dir.join(".env"),
-                    proj_dir.join("fastlane").join(".env"),
-                ]);
-                let resolve = |key: &str| -> Option<String> {
-                    env.get(key).cloned()
-                        .or_else(|| std::env::var(key).ok())
-                        .filter(|v| !v.is_empty())
-                };
-
-                // GOOGLE_PLAY_JSON_KEY  – path to service-account .json file
-                // ANDROID_PACKAGE_NAME  – optional override (falls back to bundle_id)
-                let json_key_path = match resolve("GOOGLE_PLAY_JSON_KEY") {
-                    Some(p) => p,
-                    None => {
-                        android_publish_phase.set(AndroidPublishPhase::Error(
-                            "Missing GOOGLE_PLAY_JSON_KEY env var.\nSet it to the path of your Google service-account JSON file in fastlane/.env or export it before launching the app.".into()
-                        ));
-                        return;
-                    }
-                };
-                let package_name = resolve("ANDROID_PACKAGE_NAME")
-                    .or_else(|| if bundle_id.is_empty() { None } else { Some(bundle_id.clone()) })
-                    .unwrap_or_default();
-                if package_name.is_empty() {
-                    android_publish_phase.set(AndroidPublishPhase::Error(
-                        "Cannot determine Android package name.\nSet ANDROID_PACKAGE_NAME in fastlane/.env or fill in Bundle ID in the project settings.".into()
-                    ));
-                    return;
-                }
-
-                push(&format!("📦 Package: {package_name}"));
-
-                // ── 2. Read & parse service-account JSON ─────────────────────
-                let sa_json: serde_json::Value = match tokio::fs::read_to_string(&json_key_path).await
-                    .map_err(|e| e.to_string())
-                    .and_then(|s| serde_json::from_str(&s).map_err(|e| e.to_string()))
-                {
-                    Ok(v) => v,
-                    Err(e) => {
-                        android_publish_phase.set(AndroidPublishPhase::Error(
-                            format!("Failed to read service-account JSON at {json_key_path}: {e}")
-                        ));
-                        return;
-                    }
-                };
-                let client_email = sa_json["client_email"].as_str().unwrap_or("").to_string();
-                let private_key_pem = sa_json["private_key"].as_str().unwrap_or("").to_string();
-                if client_email.is_empty() || private_key_pem.is_empty() {
-                    android_publish_phase.set(AndroidPublishPhase::Error(
-                        "Service-account JSON is missing client_email or private_key.".into()
-                    ));
-                    return;
-                }
-
-                // ── 3. Mint a short-lived OAuth2 JWT and exchange for access token ──
-                push("🔑 Authenticating with Google…");
-                let access_token = match google_play_access_token(&client_email, &private_key_pem).await {
-                    Ok(t) => t,
-                    Err(e) => {
-                        android_publish_phase.set(AndroidPublishPhase::Error(
-                            format!("Authentication failed: {e}")
-                        ));
-                        return;
-                    }
-                };
-                push("✅ Authenticated");
-
-                // ── 4. Create an edit ─────────────────────────────────────────
-                push("📝 Creating edit…");
-                let edit_id = match google_play_create_edit(&access_token, &package_name).await {
-                    Ok(id) => id,
-                    Err(e) => {
-                        android_publish_phase.set(AndroidPublishPhase::Error(
-                            format!("Failed to create edit: {e}")
-                        ));
-                        return;
-                    }
-                };
-                push(&format!("   Edit ID: {edit_id}"));
-
-                // ── 5. Collect Android screenshots from output_paths ──────────
-                // output_paths entries: (label, path)
-                // Labels look like "Screen 1 → Android Phone" / "Screen 1 → Android Feature"
-                // Android screenshots are locale-agnostic (text is baked in per-locale at generation).
-                // We upload to all selected locales using the same screenshot files.
-                let selected_locales = proj.read().locales.clone();
-                let play_languages = if selected_locales.is_empty() {
-                    vec![proj.read().locale.clone()]
-                } else {
-                    selected_locales.clone()
-                };
-
-                let android_files: Vec<(String, PathBuf)> = output_paths
-                    .iter()
-                    .filter(|(label, path)| {
-                        (label.contains("Android Phone") || label.contains("Android Feature"))
-                        && path.exists()
-                    })
-                    .map(|(label, path)| (label.clone(), path.clone()))
-                    .collect();
-
-                if android_files.is_empty() {
-                    android_publish_phase.set(AndroidPublishPhase::Error(
-                        "No Android screenshots found. Generate screenshots first.".into()
-                    ));
-                    let _ = google_play_delete_edit(&access_token, &package_name, &edit_id).await;
-                    return;
-                }
-
-                push(&format!("🖼  Found {} Android screenshot(s) to upload across {} locale(s)",
-                    android_files.len(), play_languages.len()));
-
-                // ── 6. Upload each screenshot per locale ──────────────────────
-                for play_language in &play_languages {
-                    push(&format!("─── Locale: {play_language} ───"));
-
-                    // Collect paths for this locale (prefer locale-specific files if they exist)
-                    let mut phone_paths: Vec<PathBuf> = Vec::new();
-                    let mut feature_paths: Vec<PathBuf> = Vec::new();
-
-                    // First try locale-specific paths (generated by multi-locale flow)
-                    let locale_phone: Vec<PathBuf> = android_files.iter()
-                        .filter(|(l, p)| l.contains("Android Phone") && p.to_string_lossy().contains(play_language.as_str()))
-                        .map(|(_, p)| p.clone()).collect();
-                    let locale_feature: Vec<PathBuf> = android_files.iter()
-                        .filter(|(l, p)| l.contains("Android Feature") && p.to_string_lossy().contains(play_language.as_str()))
-                        .map(|(_, p)| p.clone()).collect();
-
-                    if !locale_phone.is_empty() || !locale_feature.is_empty() {
-                        phone_paths = locale_phone;
-                        feature_paths = locale_feature;
-                    } else {
-                        // Fall back to any Android screenshots (single-locale generation)
-                        for (label, path) in &android_files {
-                            if label.contains("Android Phone") { phone_paths.push(path.clone()); }
-                            else if label.contains("Android Feature") { feature_paths.push(path.clone()); }
-                        }
-                    }
-
-                    // Delete existing then upload for each image type
-                    for (image_type, paths) in [
-                        ("PHONE_SCREENSHOTS", &phone_paths),
-                        ("FEATURE_GRAPHIC", &feature_paths),
-                    ] {
-                        if paths.is_empty() { continue; }
-
-                        // Clear existing
-                        let _ = google_play_delete_images(
-                            &access_token, &package_name, &edit_id, play_language, image_type
-                        ).await;
-
-                        for path in paths {
-                            let fname = path.file_name().unwrap_or_default().to_string_lossy();
-                            push(&format!("⬆  [{play_language}] Uploading {fname} ({image_type})…"));
-                            if let Err(e) = google_play_upload_image(
-                                &access_token, &package_name, &edit_id,
-                                play_language, image_type, path
-                            ).await {
-                                let _ = google_play_delete_edit(&access_token, &package_name, &edit_id).await;
-                                android_publish_phase.set(AndroidPublishPhase::Error(
-                                    format!("[{play_language}] Upload failed for {fname}: {e}")
-                                ));
-                                return;
-                            }
-                            push(&format!("   ✅ {fname}"));
-                        }
-                    }
-                }
-
-                // ── 7. Commit the edit ────────────────────────────────────────
-                push("💾 Committing edit…");
-                if let Err(e) = google_play_commit_edit(&access_token, &package_name, &edit_id).await {
-                    android_publish_phase.set(AndroidPublishPhase::Error(
-                        format!("Failed to commit edit: {e}")
-                    ));
-                    return;
-                }
-
-                push("🎉 Android screenshots uploaded to Google Play successfully!");
-                android_publish_phase.set(AndroidPublishPhase::Success);
-            });
-        }
-    };
-
-    // ---- Run build script ----
-    // Ensures scripts exist (generates if missing), then runs the chosen one.
-    let on_run_script = {
-        let proj_dir = proj_dir5.clone();
-        move |script_name: String| {
-            let app_name = proj.read().app_name.clone();
-            let project_slug = proj.read().project_slug.clone();
-            let ios_bundle_id = proj.read().ios_bundle_id.clone();
-            let android_bundle_id = proj.read().android_bundle_id.clone();
-            let identity = settings.read().apple_identity.clone();
-            let profile = settings.read().provisioning_profile.clone();
-            let short_version = settings.read().ios_short_version.clone();
-            let logo_path = proj.read().logo_path.clone();
-
-            // Validate required fields
-            if app_name.trim().is_empty() || project_slug.trim().is_empty()
-                || (ios_bundle_id.trim().is_empty() && android_bundle_id.trim().is_empty())
-            {
-                build_phase.set(BuildPhase::Error(
-                    "App Name, Project Slug, and at least one Bundle ID are required. Fill them in the Build Config card.".into()
-                ));
-                output_tab.set(OutputTab::Build);
-                return;
-            }
-            if script_name.contains("ios") && (identity.trim().is_empty() || profile.trim().is_empty()) {
-                build_phase.set(BuildPhase::Error(
-                    "Apple Identity and Provisioning Profile are required for iOS. Set them in ⚙ Settings.".into()
-                ));
-                output_tab.set(OutputTab::Build);
-                return;
-            }
-
-            build_phase.set(BuildPhase::Running(script_name.clone()));
-            build_log.set(Vec::new());
-            output_tab.set(OutputTab::Build);
-
-            let dir = proj_dir.clone();
-            spawn(async move {
-                // 0. Sync logo → assets/icon.png so the build script always uses the latest logo.
-                // Always re-encode as genuine PNG — the source may be a JPEG renamed to .png,
-                // which Apple's validator rejects even though the extension looks right.
-                if let Some(src) = &logo_path {
-                    let dest = dir.join("assets").join("icon.png");
-                    let src2 = src.clone();
-                    let dest2 = dest.clone();
-                    match tokio::task::spawn_blocking(move || {
-                        image::open(&src2)
-                            .map_err(|e| e.to_string())
-                            .and_then(|img| {
-                                // Convert to RGB (drop alpha) and save as real PNG
-                                img.to_rgb8()
-                                   .save_with_format(&dest2, image::ImageFormat::Png)
-                                   .map_err(|e| e.to_string())
-                            })
-                    }).await {
-                        Ok(Ok(_))  => build_log.write().push("🖼️  Logo saved as true PNG to assets/icon.png".into()),
-                        Ok(Err(e)) => build_log.write().push(format!("⚠️  Could not encode logo as PNG: {e}")),
-                        Err(e)     => build_log.write().push(format!("⚠️  Logo task failed: {e}")),
-                    }
-                }
-
-                // 1. Ensure scripts exist (create if missing)
-                let created = tokio::task::spawn_blocking({
-                    let dir = dir.clone();
-                    let app_name = app_name.clone();
-                    let project_slug = project_slug.clone();
-                    let ios_bundle_id = ios_bundle_id.clone();
-                    let android_bundle_id = android_bundle_id.clone();
-                    let identity = identity.clone();
-                    let profile = profile.clone();
-                    let short_version = short_version.clone();
-                    move || ensure_build_scripts(&dir, &app_name, &project_slug, &ios_bundle_id, &android_bundle_id, &identity, &profile, &short_version)
-                }).await.unwrap_or_default();
-
-                for name in &created {
-                    build_log.write().push(format!("📝 Created {name}"));
-                }
-
-                // 2. Run the script
-                let script_path = dir.join(&script_name);
-                if !script_path.exists() {
-                    build_phase.set(BuildPhase::Error(format!("{script_name} not found in project directory")));
-                    return;
-                }
-
-                build_log.write().push(format!("▶ Running {script_name}…"));
-
-                // Spawn the bash script on a plain OS thread (Signals are !Send).
-                // Lines flow back via mpsc; we poll from this async task and push
-                // to the Signal here on the UI thread so Dioxus re-renders live.
-                {
-                    use std::io::{BufRead, BufReader};
-                    use std::process::Stdio;
-                    use std::sync::mpsc;
-
-                    let (tx, rx) = mpsc::channel::<Result<String, String>>();
-                    let script_name_for_thread = script_name.clone();
-
-                    std::thread::spawn(move || {
-                        let script_name = script_name_for_thread;
-                        let mut cmd = std::process::Command::new("bash");
-                        cmd.arg(&script_path)
-                           .current_dir(&dir)
-                           .env("CI", "1")
-                           .stdout(Stdio::piped())
-                           .stderr(Stdio::piped());
-                        for (k, v) in load_env(&[dir.join(".env")]) {
-                            cmd.env(k, v);
-                        }
-
-                        let mut child = match cmd.spawn() {
-                            Ok(c) => c,
-                            Err(e) => { let _ = tx.send(Err(format!("spawn: {e}"))); return; }
-                        };
-
-                        let tx2 = tx.clone();
-                        let stderr_stream = child.stderr.take();
-                        std::thread::spawn(move || {
-                            if let Some(r) = stderr_stream.map(BufReader::new) {
-                                for line in r.lines().map_while(Result::ok) {
-                                    let _ = tx2.send(Ok(line));
-                                }
-                            }
-                        });
-
-                        if let Some(stdout) = child.stdout.take() {
-                            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                                let _ = tx.send(Ok(line));
-                            }
-                        }
-
-                        match child.wait() {
-                            Ok(s) if s.success() => { let _ = tx.send(Err("__ok__".into())); }
-                            Ok(s) => { let _ = tx.send(Err(format!("{script_name} exited with code {}", s.code().unwrap_or(-1)))); }
-                            Err(e) => { let _ = tx.send(Err(format!("wait: {e}"))); }
-                        }
-                    });
-
-                    loop {
-                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                        let mut done = false;
-                        for msg in rx.try_iter() {
-                            match msg {
-                                Ok(line) => {
-                                    let clean = strip_ansi(&line);
-                                    if !clean.trim().is_empty() {
-                                        build_log.write().push(clean);
-                                    }
-                                }
-                                Err(sentinel) if sentinel == "__ok__" => {
-                                    build_phase.set(BuildPhase::Success(script_name.clone()));
-                                    done = true;
-                                }
-                                Err(err_msg) => {
-                                    build_phase.set(BuildPhase::Error(err_msg));
-                                    done = true;
-                                }
-                            }
-                        }
-                        if done { break; }
-                    }
-                }
-            });
-        }
-    };
-
-    // ---- File picker — adds images to the currently active locale tab ----
-    #[cfg(not(target_os = "android"))]
-    let pick_files = move |_| {
-        let proj_dir = proj_dir.clone();
-        let locale_for_pick = active_locale_tab.read().clone();
-        spawn(async move {
-            let files = rfd::AsyncFileDialog::new()
-                .add_filter("Images", &["png", "jpg", "jpeg"])
-                .pick_files()
-                .await;
-            if let Some(selected) = files {
-                let mut p = proj.write();
-                let srcs = p.locale_sources
-                    .entry(locale_for_pick.clone())
-                    .or_insert_with(Vec::new);
-                for f in selected {
-                    let path = f.path().to_path_buf();
-                    if !srcs.contains(&path) {
-                        srcs.push(path);
-                    }
-                }
-                let n = p.locale_sources[&locale_for_pick].len();
-                p.ensure_texts_len(&locale_for_pick, n);
-                save_project_state(&proj_dir, &p);
-            }
-        });
-    };
-    // Android has no stable path to reference back to (a content:// URI isn't
-    // guaranteed to survive past this session), so each picked image is
-    // copied into the project instead of referenced in place — unlike
-    // desktop's pick_files above, which keeps pointing at the original file.
-    #[cfg(target_os = "android")]
-    let pick_files = move |_| {
-        let proj_dir = proj_dir.clone();
-        let locale_for_pick = active_locale_tab.read().clone();
-        spawn(async move {
-            let picked = android_saf::pick_images(true).await;
-            if picked.is_empty() {
-                return;
-            }
-            let sources_dir = proj_dir.join("sources").join(&locale_for_pick);
-            let _ = tokio::fs::create_dir_all(&sources_dir).await;
-
-            let mut written = Vec::new();
-            for (fname, bytes) in picked {
-                let dest = sources_dir.join(&fname);
-                if tokio::fs::write(&dest, &bytes).await.is_ok() {
-                    written.push(dest);
-                }
-            }
-
-            let mut p = proj.write();
-            let srcs = p.locale_sources
-                .entry(locale_for_pick.clone())
-                .or_insert_with(Vec::new);
-            for dest in written {
-                if !srcs.contains(&dest) {
-                    srcs.push(dest);
-                }
-            }
-            let n = p.locale_sources[&locale_for_pick].len();
-            p.ensure_texts_len(&locale_for_pick, n);
-            save_project_state(&proj_dir, &p);
-        });
-    };
-
-    // ---- AI Generate ----
-    let mut on_generate_ai = {
-        let fastlane_path = fastlane_path.clone();
-        let proj_dir = project_dir.clone();
-        move |_| {
-            let prompt = proj.read().theme_prompt.clone();
-            let selected_locales = proj.read().locales.clone();
-            // Per-locale sources: locale → Vec<PathBuf>
-            let locale_srcs: std::collections::HashMap<String, Vec<PathBuf>> = selected_locales
-                .iter()
-                .map(|loc| (loc.clone(), proj.read().sources_for(loc)))
-                .collect();
-            let ios_enabled = proj.read().ios_targets.clone();
-            let android_enabled = proj.read().android_targets.clone();
-            let export_ios = proj.read().export_ios;
-            let export_android = proj.read().export_android;
-            let fl_path = fastlane_path.to_string_lossy().to_string();
-
-            // Check every locale has at least one image
-            let empty_locales: Vec<&String> = selected_locales.iter()
-                .filter(|loc| locale_srcs.get(*loc).map(|v| v.is_empty()).unwrap_or(true))
-                .collect();
-            if !empty_locales.is_empty() {
-                phase.set(AppPhase::Error(format!(
-                    "No images for locale(s): {}. Add images in each language tab.",
-                    empty_locales.iter().map(|l| l.as_str()).collect::<Vec<_>>().join(", ")
-                )));
-                return;
-            }
-            if prompt.trim().is_empty() {
-                phase.set(AppPhase::Error(
-                    "Please enter a theme prompt for AI generation.".into(),
-                ));
-                return;
-            }
-
-            // Save prompt to history
-            {
-                let trimmed = prompt.trim().to_string();
-                let mut p = proj.write();
-                p.theme_history.retain(|h| h != &trimmed);
-                p.theme_history.insert(0, trimmed);
-                p.theme_history.truncate(MAX_THEME_HISTORY);
-                save_project_state(&proj_dir, &p);
-            }
-
-            let api_key = settings.read().fal_key.clone();
-            let phone_style = settings.read().phone_style.clone();
-            let steps_val = settings.read().inference_steps;
-            let proj_dir = proj_dir.clone();
-
-            spawn(async move {
-                phase.set(AppPhase::GeneratingAi);
-                log_lines.set(Vec::new());
-                output_tab.set(OutputTab::Progress);
-                {
-                    let mut p = proj.write();
-                    p.generated_urls.clear();
-                    p.output_paths.clear();
-                }
-
-                if api_key.is_empty() {
-                    phase.set(AppPhase::Error(
-                        "No fal.ai API key set. Click the gear icon.".into(),
-                    ));
-                    return;
-                }
-
-                let frame_w: u32 = 1290;
-                let frame_h: u32 = 2796;
-                let mut all_outputs: Vec<(String, PathBuf)> = Vec::new();
-                let ios_e: Vec<bool> = if export_ios { ios_enabled.clone() } else { vec![] };
-                let android_e: Vec<bool> = if export_android { android_enabled.clone() } else { vec![] };
-
-                // Each locale has its own images — process independently
-                for locale in &selected_locales {
-                    let srcs = locale_srcs.get(locale).cloned().unwrap_or_default();
-                    let total = srcs.len();
-                    add_log(format!("─── AI generating locale: {locale} ({total} image(s)) ───"));
-
-                    for (idx, src) in srcs.iter().enumerate() {
-                        let screen_num = idx + 1;
-                        add_log(format!(
-                            "[{locale}] Reading image {screen_num}/{total}: {}",
-                            src.file_name().unwrap_or_default().to_string_lossy()
-                        ));
-
-                        // Async file read — does not block the UI.
-                        let img_bytes = match tokio::fs::read(src).await {
-                            Ok(b) => b,
-                            Err(e) => {
-                                phase.set(AppPhase::Error(format!(
-                                    "[{locale}] Failed to read image {screen_num}: {e}"
-                                )));
-                                return;
-                            }
-                        };
-                        // Decode source screenshot (fast, fine on async thread).
-                        let screenshot = match image::load_from_memory(&img_bytes) {
-                            Ok(img) => img.to_rgba8(),
-                            Err(e) => {
-                                phase.set(AppPhase::Error(format!(
-                                    "[{locale}] Failed to decode image {screen_num}: {e}"
-                                )));
-                                return;
-                            }
-                        };
-
-                        let full_prompt = build_prompt(&prompt, &phone_style, screen_num, total);
-                        add_log(format!("[{locale}] Generating frame {screen_num}/{total} via FLUX…"));
-
-                        let frame_url = match call_fal_text_to_image(
-                            &api_key, &full_prompt, frame_w, frame_h, steps_val,
-                        ).await {
-                            Ok(url) => { add_log(format!("Got frame {screen_num}")); url }
-                            Err(e) => {
-                                phase.set(AppPhase::Error(format!(
-                                    "[{locale}] Frame generation failed for screen {screen_num}: {e}"
-                                )));
-                                return;
-                            }
-                        };
-
-                        add_log(format!("[{locale}] Downloading frame {screen_num}…"));
-                        let frame_bytes = match download_image(&frame_url).await {
-                            Ok(b) => b,
-                            Err(e) => {
-                                phase.set(AppPhase::Error(format!(
-                                    "[{locale}] Download failed for frame {screen_num}: {e}"
-                                )));
-                                return;
-                            }
-                        };
-
-                        // Heavy CPU work (decode AI frame, composite, encode, resize) on a
-                        // blocking thread so the async executor — and the UI — stay free.
-                        phase.set(AppPhase::Resizing);
-                        add_log(format!("[{locale}] Compositing screenshot {screen_num}…"));
-                        let locale2    = locale.clone();
-                        let fl_path2   = fl_path.clone();
-                        let ios_e2     = ios_e.clone();
-                        let android_e2 = android_e.clone();
-                        let cpu = tokio::task::spawn_blocking(move || -> Result<(Vec<(String, PathBuf)>, Option<String>), String> {
-                            let mut frame_img = image::load_from_memory(&frame_bytes)
-                                .map_err(|e| format!("[{locale2}] Failed to decode frame {screen_num}: {e}"))?.to_rgba8();
-                            let rect = find_placeholder_rect(&frame_img)
-                                .unwrap_or_else(|| fallback_placement(frame_img.width(), frame_img.height()));
-                            composite_screenshot(&mut frame_img, &screenshot, rect);
-
-                            let composited_bytes = {
-                                let mut buf = std::io::Cursor::new(Vec::new());
-                                frame_img.write_to(&mut buf, image::ImageFormat::Png)
-                                    .map_err(|e| format!("[{locale2}] Failed to encode image {screen_num}: {e}"))?;
-                                buf.into_inner()
-                            };
-
-                            let paths = resize_to_targets(
-                                &composited_bytes, screen_num, total, &locale2,
-                                &fl_path2, &ios_e2, &android_e2,
-                            ).map_err(|e| format!("Resize failed for [{locale2}] screen {screen_num}: {e}"))?;
-
-                            let preview = paths.iter()
-                                .find(|(l, _)| l.contains("6.7"))
-                                .map(|(_, p)| urlencoding::encode(&p.to_string_lossy().to_string()).into_owned());
-
-                            Ok((paths, preview))
-                        });
-
-                        let (paths, preview) = match cpu.await {
-                            Ok(Ok(v))  => v,
-                            Ok(Err(e)) => { phase.set(AppPhase::Error(e)); return; }
-                            Err(e)     => { phase.set(AppPhase::Error(format!("Thread panic: {e}"))); return; }
-                        };
-
-                        for (label, _) in &paths { add_log(format!("Saved: {label}")); }
-                        if let Some(enc) = preview {
-                            let mut pw = proj.write();
-                            if !pw.generated_urls.iter().any(|u| u.contains(&enc)) {
-                                pw.generated_urls.push(format!("/localimg/{enc}"));
-                            }
-                        }
-                        all_outputs.extend(paths);
-                        phase.set(AppPhase::GeneratingAi);
-                    }
-                }
-
-                {
-                    let mut p = proj.write();
-                    p.output_paths = all_outputs;
-                    save_project_state(&proj_dir, &p);
-                }
-                let loc_count = selected_locales.len();
-                add_log(format!("Done! AI screenshots generated for {loc_count} locale(s)."));
-                phase.set(AppPhase::Done);
-                output_tab.set(OutputTab::GeneratedImages);
-            });
-        }
-    };
-
-    // ---- Manual Generate ----
-    let mut on_generate_manual = {
-        let fastlane_path = fastlane_path.clone();
-        let proj_dir = project_dir.clone();
-        move |_| {
-            let primary = proj.read().primary_color.clone();
-            let secondary = proj.read().secondary_color.clone();
-            let selected_locales = proj.read().locales.clone();
-            // Per-locale sources and texts
-            let locale_srcs: std::collections::HashMap<String, Vec<PathBuf>> = selected_locales
-                .iter()
-                .map(|loc| (loc.clone(), proj.read().sources_for(loc)))
-                .collect();
-            let locale_texts_map: std::collections::HashMap<String, Vec<(String,String)>> = selected_locales
-                .iter()
-                .map(|loc| (loc.clone(), proj.read().texts_for(loc)))
-                .collect();
-            let ios_enabled = proj.read().ios_targets.clone();
-            let android_enabled = proj.read().android_targets.clone();
-            let export_ios = proj.read().export_ios;
-            let export_android = proj.read().export_android;
-            let fl_path = fastlane_path.to_string_lossy().to_string();
-            let proj_dir = proj_dir.clone();
-
-            // Check every locale has at least one image
-            let empty_locales: Vec<&String> = selected_locales.iter()
-                .filter(|loc| locale_srcs.get(*loc).map(|v| v.is_empty()).unwrap_or(true))
-                .collect();
-            if !empty_locales.is_empty() {
-                phase.set(AppPhase::Error(format!(
-                    "No images for locale(s): {}. Add images in each language tab.",
-                    empty_locales.iter().map(|l| l.as_str()).collect::<Vec<_>>().join(", ")
-                )));
-                return;
-            }
-
-            spawn(async move {
-                phase.set(AppPhase::GeneratingManual);
-                log_lines.set(Vec::new());
-                output_tab.set(OutputTab::Progress);
-                {
-                    let mut p = proj.write();
-                    p.generated_urls.clear();
-                    p.output_paths.clear();
-                }
-
-                let primary_rgba = parse_hex_color(&primary).unwrap_or(Rgba([59, 130, 246, 255]));
-                let secondary_rgba = if !secondary.is_empty() {
-                    parse_hex_color(&secondary).unwrap_or(lighten_color(primary_rgba))
-                } else {
-                    lighten_color(primary_rgba)
-                };
-                let mut all_outputs: Vec<(String, PathBuf)> = Vec::new();
-
-                // Each locale has its own images — process independently
-                for locale in &selected_locales {
-                    let srcs = locale_srcs.get(locale).cloned().unwrap_or_default();
-                    let total = srcs.len();
-                    let texts = locale_texts_map.get(locale).cloned().unwrap_or_default();
-                    add_log(format!("─── Generating locale: {locale} ({total} image(s)) ───"));
-
-                    for (idx, src) in srcs.iter().enumerate() {
-                        let screen_num = idx + 1;
-                        add_log(format!("[{locale}] Processing image {screen_num}/{total}…"));
-
-                        // Clone everything the blocking thread needs.
-                        let src2      = src.clone();
-                        let locale2   = locale.clone();
-                        let fl_path2  = fl_path.clone();
-                        let ios_e     = if export_ios    { ios_enabled.clone()     } else { vec![] };
-                        let android_e = if export_android { android_enabled.clone() } else { vec![] };
-                        let bg_color  = if idx % 2 == 0 { primary_rgba } else { secondary_rgba };
-                        let (title, subtitle) = texts.get(idx).cloned().unwrap_or_default();
-
-                        // All CPU-heavy work (read, decode, composite, encode, resize) runs on
-                        // a blocking thread so the async executor — and the UI — stay free.
-                        let cpu = tokio::task::spawn_blocking(move || -> Result<(Vec<(String, PathBuf)>, Option<String>), String> {
-                            const W: u32 = 1290;
-                            const H: u32 = 2796;
-                            let font = FontRef::try_from_slice(ROBOTO_FONT).expect("font");
-
-                            let screenshot_bytes = std::fs::read(&src2)
-                                .map_err(|e| format!("Failed to read image {screen_num}: {e}"))?;
-                            let screenshot = image::load_from_memory(&screenshot_bytes)
-                                .map_err(|e| format!("Failed to decode image {screen_num}: {e}"))?.to_rgba8();
-
-                            let mut img    = RgbaImage::from_pixel(W, H, bg_color);
-                            let text_color = get_contrast_color(bg_color);
-                            if !title.is_empty() {
-                                draw_centered_text(&mut img, &font, &title,    PxScale::from(120.0), text_color, 200);
-                            }
-                            if !subtitle.is_empty() {
-                                draw_centered_text(&mut img, &font, &subtitle, PxScale::from(60.0),  text_color, 350);
-                            }
-
-                            let phone_w = (W as f64 * 0.7 ) as u32;
-                            let phone_h = (phone_w as f64 * 2.16) as u32;
-                            let phone_x = (W - phone_w) / 2;
-                            let phone_y = H - phone_h - 150;
-                            let resized = image::imageops::resize(&screenshot, phone_w, phone_h, FilterType::Lanczos3);
-                            image::imageops::overlay(&mut img, &resized, phone_x as i64, phone_y as i64);
-
-                            let composited_bytes = {
-                                let mut buf = std::io::Cursor::new(Vec::new());
-                                img.write_to(&mut buf, image::ImageFormat::Png)
-                                    .map_err(|e| format!("Failed to encode image {screen_num}: {e}"))?;
-                                buf.into_inner()
-                            };
-
-                            let paths = resize_to_targets(
-                                &composited_bytes, screen_num, total, &locale2,
-                                &fl_path2, &ios_e, &android_e,
-                            ).map_err(|e| format!("Resize failed for [{locale2}] screen {screen_num}: {e}"))?;
-
-                            let preview = paths.iter()
-                                .find(|(l, _)| l.contains("6.7"))
-                                .map(|(_, p)| urlencoding::encode(&p.to_string_lossy().to_string()).into_owned());
-
-                            Ok((paths, preview))
-                        });
-
-                        let (paths, preview) = match cpu.await {
-                            Ok(Ok(v))  => v,
-                            Ok(Err(e)) => { phase.set(AppPhase::Error(e)); return; }
-                            Err(e)     => { phase.set(AppPhase::Error(format!("Thread panic: {e}"))); return; }
-                        };
-
-                        for (label, _) in &paths { add_log(format!("Saved: {label}")); }
-                        if let Some(enc) = preview {
-                            proj.write().generated_urls.push(format!("/localimg/{enc}"));
-                        }
-                        all_outputs.extend(paths);
-                    }
-                }
-
-                {
-                    let mut p = proj.write();
-                    p.output_paths = all_outputs;
-                    save_project_state(&proj_dir, &p);
-                }
-                let loc_count = selected_locales.len();
-                add_log(format!("Done! Manual screenshots generated for {loc_count} locale(s)."));
-                phase.set(AppPhase::Done);
-                output_tab.set(OutputTab::GeneratedImages);
-            });
-        }
-    };
-
-    let is_busy = matches!(
-        *phase.read(),
-        AppPhase::GeneratingAi | AppPhase::GeneratingManual | AppPhase::Resizing
-    );
-    let proj_name = project_dir
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-    let fastlane_display = fastlane_path.to_string_lossy().to_string();
-
-    rsx! {
-        div { class: "app-container",
-            // ---- Header ----
-            div { class: "header-row",
-                div { class: "header-left",
-                    button {
-                        class: "btn btn-icon btn-back",
-                        onclick: move |_| on_close.call(()),
-                        title: "Back to project picker",
-                        aria_label: "Back to project picker",
-                        {icon_chevron_left()}
-                    }
-                    div {
-                        h1 { "{proj_name}" }
-                        p { class: "subtitle", "{fastlane_display}" }
-                    }
-                }
-                button {
-                    class: "btn btn-icon",
-                    onclick: move |_| show_settings.toggle(),
-                    title: "Settings",
-                    aria_label: "Settings",
-                    svg {
-                        class: "icon icon-fill icon-lg", view_box: "0 0 20 20",
-                        path { d: "M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" }
-                    }
-                }
-            }
-
-            if *show_settings.read() {
-                SettingsPopup { on_close: move |_| show_settings.set(false) }
-            }
-
-            // ---- 1. Build Config ----
-            div { class: "card",
-                h2 { "1. Build Config" }
-                p { class: "hint card-hint",
-                    "Used to generate build scripts for this project. Scripts are created once in the project folder and never overwritten."
-                }
-                div { class: "build-config-grid",
-                    div { class: "build-config-field",
-                        label { class: "build-config-label", "App Name" }
-                        input {
-                            class: "text-input",
-                            placeholder: "Abjad",
-                            value: "{proj.read().app_name}",
-                            oninput: {
-                                let proj_dir_save = project_dir.clone();
-                                move |e: Event<FormData>| {
-                                    let mut p = proj.write();
-                                    p.app_name = e.value();
-                                    save_project_state(&proj_dir_save, &p);
-                                }
-                            }
-                        }
-                        p { class: "settings-hint", "Display name, e.g. \"Abjad\"" }
-                    }
-                    div { class: "build-config-field",
-                        label { class: "build-config-label", "Project Slug" }
-                        input {
-                            class: "text-input",
-                            placeholder: "abjad",
-                            value: "{proj.read().project_slug}",
-                            oninput: {
-                                let proj_dir_save = project_dir.clone();
-                                move |e: Event<FormData>| {
-                                    let mut p = proj.write();
-                                    p.project_slug = e.value();
-                                    save_project_state(&proj_dir_save, &p);
-                                }
-                            }
-                        }
-                        p { class: "settings-hint", "Lowercase dx slug, e.g. \"abjad\"" }
-                    }
-                    div { class: "build-config-field",
-                        label { class: "build-config-label", "iOS Bundle ID" }
-                        input {
-                            class: "text-input",
-                            placeholder: "com.company.app",
-                            value: "{proj.read().ios_bundle_id}",
-                            oninput: {
-                                let proj_dir_save = project_dir.clone();
-                                move |e: Event<FormData>| {
-                                    let mut p = proj.write();
-                                    p.ios_bundle_id = e.value();
-                                    save_project_state(&proj_dir_save, &p);
-                                }
-                            }
-                        }
-                        p { class: "settings-hint", "iOS bundle ID, e.g. \"com.mayorana.tafseel.mufrad\"" }
-                    }
-                    div { class: "build-config-field",
-                        label { class: "build-config-label", "Android Package" }
-                        input {
-                            class: "text-input",
-                            placeholder: "com.company.app",
-                            value: "{proj.read().android_bundle_id}",
-                            oninput: {
-                                let proj_dir_save = project_dir.clone();
-                                move |e: Event<FormData>| {
-                                    let mut p = proj.write();
-                                    p.android_bundle_id = e.value();
-                                    save_project_state(&proj_dir_save, &p);
-                                }
-                            }
-                        }
-                        p { class: "settings-hint", "Android package name, e.g. \"com.mayorana.mufrad\"" }
-                    }
-                    // Platform selector
-                    div { class: "build-config-field",
-                        label { class: "build-config-label", "Platform" }
-                        div { class: "platform-selector",
-                            for plat in [PlatformType::IosAndroid, PlatformType::Ios, PlatformType::Android, PlatformType::Desktop] {
-                                {
-                                    let label = plat.label();
-                                    let is_selected = proj.read().platform_type == plat;
-                                    let plat2 = plat.clone();
-                                    let proj_dir_save = project_dir.clone();
-                                    rsx! {
-                                        button {
-                                            class: if is_selected { "platform-btn platform-btn-active" } else { "platform-btn" },
-                                            onclick: move |_| {
-                                                let mut p = proj.write();
-                                                p.platform_type = plat2.clone();
-                                                // Sync export checkboxes to match platform
-                                                p.export_ios     = p.platform_type.has_ios();
-                                                p.export_android = p.platform_type.has_android();
-                                                save_project_state(&proj_dir_save, &p);
-                                            },
-                                            "{label}"
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        p { class: "settings-hint", "Controls which export targets are shown below" }
-                    }
-                }
-            }
-
-            // ---- 2. App Logo ----
-            div { class: "card",
-                h2 { "2. App Logo (optional)" }
-                p { class: "hint card-hint", "Upload your app icon to use as a watermark / logo overlay." }
-                div { class: "logo-upload-row",
-                    button { class: "btn", onclick: pick_logo, "Choose Logo…" }
-                    if let Some(logo) = proj.read().logo_path.clone() {
-                        {
-                            let logo_str = logo.to_string_lossy().to_string();
-                            let encoded = urlencoding::encode(&logo_str).into_owned();
-                            let thumb_src = format!("/localimg/{encoded}");
-                            let proj_dir_save = project_dir.clone();
-                            rsx! {
-                                div { class: "logo-preview",
-                                    img { class: "logo-thumb", src: "{thumb_src}", alt: "Logo preview" }
-                                    div { class: "logo-info",
-                                        span { class: "logo-path", title: "{logo_str}", "{logo_str}" }
-                                        button {
-                                            class: "btn-remove",
-                                            title: "Remove logo",
-                                            aria_label: "Remove logo",
-                                            onclick: move |_| {
-                                                let mut p = proj.write();
-                                                p.logo_path = None;
-                                                save_project_state(&proj_dir_save, &p);
-                                            },
-                                            {icon_close()}
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // ---- 3. Export Settings ----
-            div { class: "card export-settings-card",
-                h2 { "3. Export Settings" }
-                div { class: "export-settings-grid",
-
-                    // Desktop targets (only for Desktop platform)
-                    if proj.read().platform_type.has_desktop() {
-                        div { class: "export-section",
-                            div { class: "export-platform-header",
-                                span { class: "export-platform-label",
-                                    {icon_monitor()}
-                                    "Desktop"
-                                }
-                            }
-                            div { class: "export-targets",
-                                for (ti, &(_, tname, tw, th)) in DESKTOP_TARGETS.iter().enumerate() {
-                                    {
-                                        let ti = ti;
-                                        let checked = proj.read().desktop_targets.get(ti).copied().unwrap_or(true);
-                                        let proj_dir_save = project_dir.clone();
-                                        let chk_id = format!("chk-desktop-{ti}");
-                                        rsx! {
-                                            div { class: "export-target-row",
-                                                input {
-                                                    r#type: "checkbox",
-                                                    id: "{chk_id}",
-                                                    checked: checked,
-                                                    onchange: {
-                                                        let proj_dir_save = proj_dir_save.clone();
-                                                        move |e: Event<FormData>| {
-                                                            let mut p = proj.write();
-                                                            if ti < p.desktop_targets.len() {
-                                                                p.desktop_targets[ti] = e.value() == "true";
-                                                            }
-                                                            save_project_state(&proj_dir_save, &p);
-                                                        }
-                                                    }
-                                                }
-                                                label { r#for: "{chk_id}", class: "export-target-label",
-                                                    span { class: "export-target-name", "{tname}" }
-                                                    span { class: "export-target-dim", "{tw}×{th}" }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            p { class: "settings-hint",
-                                "Run your desktop app and take a screenshot, then add the screenshot as a source image above."
-                            }
-                        }
-                    }
-
-                    // iOS targets
-                    if proj.read().platform_type.has_ios() || proj.read().export_ios {
-                    div { class: "export-section",
-                        div { class: "export-platform-header",
-                            input {
-                                r#type: "checkbox",
-                                id: "chk-ios",
-                                checked: proj.read().export_ios,
-                                onchange: {
-                                    let proj_dir_save = project_dir.clone();
-                                    move |e: Event<FormData>| {
-                                        let mut p = proj.write();
-                                        p.export_ios = e.value() == "true";
-                                        save_project_state(&proj_dir_save, &p);
-                                    }
-                                }
-                            }
-                            label { r#for: "chk-ios", class: "export-platform-label export-ios-label", "iOS" }
-                        }
-                        if proj.read().export_ios {
-                            div { class: "export-targets",
-                                for (ti, &(_, tname, tw, th)) in IOS_TARGETS.iter().enumerate() {
-                                    {
-                                        let ti = ti;
-                                        let checked = proj.read().ios_targets.get(ti).copied().unwrap_or(true);
-                                        let proj_dir_save = project_dir.clone();
-                                        let chk_id = format!("chk-ios-{ti}");
-                                        rsx! {
-                                            div { class: "export-target-row",
-                                                input {
-                                                    r#type: "checkbox",
-                                                    id: "{chk_id}",
-                                                    checked: checked,
-                                                    onchange: {
-                                                        let proj_dir_save = proj_dir_save.clone();
-                                                        move |e: Event<FormData>| {
-                                                            let mut p = proj.write();
-                                                            if ti < p.ios_targets.len() {
-                                                                p.ios_targets[ti] = e.value() == "true";
-                                                            }
-                                                            save_project_state(&proj_dir_save, &p);
-                                                        }
-                                                    }
-                                                }
-                                                label { r#for: "{chk_id}", class: "export-target-label",
-                                                    span { class: "export-target-name", "{tname}" }
-                                                    span { class: "export-target-dim", "{tw}×{th}" }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    } // end if has_ios
-
-                    // Android targets
-                    if proj.read().platform_type.has_android() || proj.read().export_android {
-                    div { class: "export-section",
-                        div { class: "export-platform-header",
-                            input {
-                                r#type: "checkbox",
-                                id: "chk-android",
-                                checked: proj.read().export_android,
-                                onchange: {
-                                    let proj_dir_save = project_dir.clone();
-                                    move |e: Event<FormData>| {
-                                        let mut p = proj.write();
-                                        p.export_android = e.value() == "true";
-                                        save_project_state(&proj_dir_save, &p);
-                                    }
-                                }
-                            }
-                            label { r#for: "chk-android", class: "export-platform-label export-android-label", "Android" }
-                        }
-                        if proj.read().export_android {
-                            div { class: "export-targets",
-                                for (ti, &(_, tname, tw, th)) in ANDROID_TARGETS.iter().enumerate() {
-                                    {
-                                        let ti = ti;
-                                        let checked = proj.read().android_targets.get(ti).copied().unwrap_or(true);
-                                        let proj_dir_save = project_dir.clone();
-                                        let chk_id = format!("chk-android-{ti}");
-                                        rsx! {
-                                            div { class: "export-target-row",
-                                                input {
-                                                    r#type: "checkbox",
-                                                    id: "{chk_id}",
-                                                    checked: checked,
-                                                    onchange: {
-                                                        let proj_dir_save = proj_dir_save.clone();
-                                                        move |e: Event<FormData>| {
-                                                            let mut p = proj.write();
-                                                            if ti < p.android_targets.len() {
-                                                                p.android_targets[ti] = e.value() == "true";
-                                                            }
-                                                            save_project_state(&proj_dir_save, &p);
-                                                        }
-                                                    }
-                                                }
-                                                label { r#for: "{chk_id}", class: "export-target-label",
-                                                    span { class: "export-target-name", "{tname}" }
-                                                    span { class: "export-target-dim", "{tw}×{th}" }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    } // end if has_android
-
-                    // Colors
-                    div { class: "export-section",
-                        p { class: "export-section-label", "Colors" }
-                        div { class: "color-inputs",
-                            div { class: "color-field",
-                                label { "Primary" }
-                                div { class: "color-picker-row",
-                                    input {
-                                        r#type: "color",
-                                        value: "{proj.read().primary_color}",
-                                        oninput: {
-                                            let proj_dir_save = project_dir.clone();
-                                            move |e: Event<FormData>| {
-                                                let mut p = proj.write();
-                                                p.primary_color = e.value();
-                                                save_project_state(&proj_dir_save, &p);
-                                            }
-                                        },
-                                    }
-                                    input {
-                                        r#type: "text",
-                                        class: "hex-input",
-                                        value: "{proj.read().primary_color}",
-                                        placeholder: "#3B82F6",
-                                        maxlength: 7,
-                                        oninput: {
-                                            let proj_dir_save = project_dir.clone();
-                                            move |e: Event<FormData>| {
-                                                let v = e.value();
-                                                let hex = if v.starts_with('#') { v.clone() } else { format!("#{v}") };
-                                                if hex.len() == 7 && hex[1..].chars().all(|c| c.is_ascii_hexdigit()) {
-                                                    let mut p = proj.write();
-                                                    p.primary_color = hex;
-                                                    save_project_state(&proj_dir_save, &p);
-                                                }
-                                            }
-                                        },
-                                    }
-                                }
-                            }
-                            div { class: "color-field",
-                                label { "Secondary" }
-                                div { class: "color-picker-row",
-                                    input {
-                                        r#type: "color",
-                                        value: "{proj.read().secondary_color}",
-                                        oninput: {
-                                            let proj_dir_save = project_dir.clone();
-                                            move |e: Event<FormData>| {
-                                                let mut p = proj.write();
-                                                p.secondary_color = e.value();
-                                                save_project_state(&proj_dir_save, &p);
-                                            }
-                                        },
-                                    }
-                                    input {
-                                        r#type: "text",
-                                        class: "hex-input",
-                                        value: "{proj.read().secondary_color}",
-                                        placeholder: "#FFFFFF",
-                                        maxlength: 7,
-                                        oninput: {
-                                            let proj_dir_save = project_dir.clone();
-                                            move |e: Event<FormData>| {
-                                                let v = e.value();
-                                                let hex = if v.starts_with('#') { v.clone() } else { format!("#{v}") };
-                                                if hex.len() == 7 && hex[1..].chars().all(|c| c.is_ascii_hexdigit()) {
-                                                    let mut p = proj.write();
-                                                    p.secondary_color = hex;
-                                                    save_project_state(&proj_dir_save, &p);
-                                                }
-                                            }
-                                        },
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // ---- 4. Source Screenshots (language-tabbed) ----
-            div { class: "card card-screenshots",
-                h2 { "4. Source Screenshots" }
-                p { class: "hint card-hint",
-                    "One set of images per language. Give each screenshot a title and a short description."
-                }
-                // ── Tab bar ──────────────────────────────────────────────────
-                div { class: "lang-tab-bar",
-                    // One tab per selected locale
-                    for loc in proj.read().locales.clone().iter() {
-                        {
-                            let loc = loc.clone();
-                            let display_name = LOCALES.iter()
-                                .find(|(c, _)| *c == loc.as_str())
-                                .map(|(_, n)| *n)
-                                .unwrap_or(loc.as_str())
-                                .to_string();
-                            let is_active = *active_locale_tab.read() == loc;
-                            let is_default = loc == "en-US";
-                            let proj_dir_save = project_dir.clone();
-                            rsx! {
-                                div {
-                                    class: if is_active { "lang-tab lang-tab-active" } else { "lang-tab" },
-                                    // Click anywhere on tab body to activate
-                                    onclick: {
-                                        let loc2 = loc.clone();
-                                        move |_| {
-                                            show_lang_picker.set(false);
-                                            active_locale_tab.set(loc2.clone());
-                                        }
-                                    },
-                                    span { class: "lang-tab-name", "{display_name}" }
-                                    // × to remove non-default tabs
-                                    if !is_default {
-                                        button {
-                                            class: "lang-tab-remove",
-                                            title: "Remove language",
-                                            aria_label: "Remove {display_name}",
-                                            onclick: {
-                                                let loc3 = loc.clone();
-                                                move |e: MouseEvent| {
-                                                    e.stop_propagation();
-                                                    let mut p = proj.write();
-                                                    p.locales.retain(|l| l != &loc3);
-                                                    if let Some(first) = p.locales.first() {
-                                                        p.locale = first.clone();
-                                                    }
-                                                    // Sync active tab
-                                                    if !p.locales.contains(&active_locale_tab.read().clone()) {
-                                                        if let Some(first) = p.locales.first() {
-                                                            active_locale_tab.set(first.clone());
-                                                        }
-                                                    }
-                                                    save_project_state(&proj_dir_save, &p);
-                                                }
-                                            },
-                                            {icon_close()}
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // ── + button with language picker dropdown ──────────────
-                    div { class: "lang-tab-add-wrapper",
-                        button {
-                            class: if *show_lang_picker.read() { "lang-tab-add lang-tab-add-open" } else { "lang-tab-add" },
-                            title: "Add language",
-                            aria_label: "Add language",
-                            onclick: move |_| show_lang_picker.toggle(),
-                            {icon_plus()}
-                        }
-                        if *show_lang_picker.read() {
-                            // Transparent full-screen backdrop — closes the picker on outside click
-                            div {
-                                class: "lang-picker-backdrop",
-                                onclick: move |_| show_lang_picker.set(false),
-                            }
-                            div { class: "lang-picker-dropdown",
-                                for (code, name) in LOCALES.iter() {
-                                    {
-                                        let code = *code;
-                                        let name = *name;
-                                        let already_added = proj.read().locales.contains(&code.to_string());
-                                        let proj_dir_save = project_dir.clone();
-                                        if already_added {
-                                            rsx! { }
-                                        } else {
-                                            rsx! {
-                                                button {
-                                                    class: "lang-picker-item",
-                                                    onclick: move |_| {
-                                                        let mut p = proj.write();
-                                                        if !p.locales.contains(&code.to_string()) {
-                                                            p.locales.push(code.to_string());
-                                                            p.locale_sources.entry(code.to_string()).or_insert_with(Vec::new);
-                                                            p.ensure_texts_len(code, 0);
-                                                            if let Some(first) = p.locales.first() {
-                                                                p.locale = first.clone();
-                                                            }
-                                                            save_project_state(&proj_dir_save, &p);
-                                                        }
-                                                        active_locale_tab.set(code.to_string());
-                                                        show_lang_picker.set(false);
-                                                    },
-                                                    span { class: "lang-picker-name", "{name}" }
-                                                    span { class: "lang-picker-code", "{code}" }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                // All languages already added
-                                if proj.read().locales.len() == LOCALES.len() {
-                                    p { class: "lang-picker-empty", "All languages added" }
-                                }
-                            }
-                        }
-                    }
-
-                    // ── Right side: image picker button ──────────────────────
-                    div { class: "lang-tab-bar-right",
-                        div { class: "lang-tab-bar-right-inner",
-                            div { class: "lang-tab-images-row",
-                                button { class: "btn btn-sm", onclick: pick_files, "Choose Images…" }
-                                {
-                                    let n = proj.read().sources_for(&active_locale_tab.read()).len();
-                                    if n > 0 {
-                                        rsx! { span { class: "source-count", "{n} image(s)" } }
-                                    } else {
-                                        rsx! {}
-                                    }
-                                }
-                            }
-                            p { class: "lang-tab-images-hint",
-                                "Images added here are specific to this language tab."
-                            }
-                        }
-                    }
-                }
-
-                // ── Tab content: source image list for active locale ─────────
-                {
-                    let active_sources = proj.read().sources_for(&active_locale_tab.read());
-                    if active_sources.is_empty() {
-                        rsx! {
-                            p { class: "source-empty",
-                                "Add source screenshots for this language tab to get started."
-                            }
-                        }
-                    } else {
-                        rsx! {
-                    div { class: "source-list",
-                        for (i, path) in active_sources.iter().enumerate() {
-                            {
-                                let idx = i;
-                                let path = path.clone();
-                                let path_str = path.to_string_lossy().to_string();
-                                let encoded_path = urlencoding::encode(&path_str).into_owned();
-                                let thumb_src = format!("/localimg/{encoded_path}");
-                                let proj_dir_save = proj_dir2.clone();
-                                let cur_locale = active_locale_tab.read().clone();
-
-                                rsx! {
-                                    div { class: "source-item",
-                                        img {
-                                            class: "source-thumb",
-                                            src: "{thumb_src}",
-                                            alt: "Source screenshot {idx + 1}",
-                                        }
-                                        div { class: "source-item-right",
-                                            div { class: "source-info",
-                                                span { class: "source-index", "{idx + 1}." }
-                                                span { class: "source-path", title: "{path_str}", "{path_str}" }
-                                            }
-                                            div { class: "manual-inputs",
-                                                // Title input — always per-locale via locale_texts
-                                                {
-                                                    let proj_dir_save2 = proj_dir_save.clone();
-                                                    let loc2 = cur_locale.clone();
-                                                    let title_val = proj.read().locale_texts
-                                                        .get(&cur_locale)
-                                                        .and_then(|v| v.get(idx))
-                                                        .map(|t| t.0.clone())
-                                                        .unwrap_or_default();
-                                                    rsx! {
-                                                        input {
-                                                            class: "text-input small-input",
-                                                            placeholder: "Title (e.g. Welcome)",
-                                                            value: "{title_val}",
-                                                            oninput: move |e: Event<FormData>| {
-                                                                let mut p = proj.write();
-                                                                p.ensure_texts_len(&loc2, idx + 1);
-                                                                p.locale_texts.get_mut(&loc2).unwrap()[idx].0 = e.value();
-                                                                // Keep legacy manual_texts in sync for the first locale
-                                                                if p.locales.first().map(|l| l.as_str()) == Some(loc2.as_str()) {
-                                                                    if idx < p.manual_texts.len() { p.manual_texts[idx].0 = e.value(); }
-                                                                }
-                                                                save_project_state(&proj_dir_save2, &p);
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                                // Subtitle input — always per-locale via locale_texts
-                                                {
-                                                    let proj_dir_save3 = proj_dir_save.clone();
-                                                    let loc3 = cur_locale.clone();
-                                                    let sub_val = proj.read().locale_texts
-                                                        .get(&cur_locale)
-                                                        .and_then(|v| v.get(idx))
-                                                        .map(|t| t.1.clone())
-                                                        .unwrap_or_default();
-                                                    rsx! {
-                                                        input {
-                                                            class: "text-input small-input",
-                                                            placeholder: "Short description…",
-                                                            value: "{sub_val}",
-                                                            oninput: move |e: Event<FormData>| {
-                                                                let mut p = proj.write();
-                                                                p.ensure_texts_len(&loc3, idx + 1);
-                                                                p.locale_texts.get_mut(&loc3).unwrap()[idx].1 = e.value();
-                                                                if p.locales.first().map(|l| l.as_str()) == Some(loc3.as_str()) {
-                                                                    if idx < p.manual_texts.len() { p.manual_texts[idx].1 = e.value(); }
-                                                                }
-                                                                save_project_state(&proj_dir_save3, &p);
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        // Sibling of .source-item-right, not its last
-                                        // child — as a child it was stranded on its own
-                                        // line at the far left, below and away from the
-                                        // row it removes.
-                                        button {
-                                            class: "btn-remove",
-                                            title: "Remove image",
-                                            aria_label: "Remove image {idx + 1}",
-                                            onclick: {
-                                                let proj_dir_save = proj_dir_save.clone();
-                                                move |_| {
-                                                    let mut p = proj.write();
-                                                    let cur_loc = active_locale_tab.read().clone();
-                                                    if let Some(srcs) = p.locale_sources.get_mut(&cur_loc) {
-                                                        if idx < srcs.len() { srcs.remove(idx); }
-                                                    }
-                                                    if idx < p.manual_texts.len() { p.manual_texts.remove(idx); }
-                                                    if let Some(v) = p.locale_texts.get_mut(&cur_loc) {
-                                                        if idx < v.len() { v.remove(idx); }
-                                                    }
-                                                    save_project_state(&proj_dir_save, &p);
-                                                }
-                                            },
-                                            {icon_close()}
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                        }
-                    }
-                }
-            }
-
-            // ---- 5. AI Theme config ----
-            div { class: "card",
-                h2 { "5. AI Theme" }
-                p { class: "hint card-hint", "Describe the visual style for the AI-generated background." }
-                textarea {
-                    class: "text-input theme-textarea",
-                    placeholder: "e.g. dark cyberpunk neon interface with glitch effects…",
-                    value: "{proj.read().theme_prompt}",
-                    rows: "3",
-                    oninput: {
-                        let proj_dir_save = project_dir.clone();
-                        move |e: Event<FormData>| {
-                            let mut p = proj.write();
-                            p.theme_prompt = e.value();
-                            save_project_state(&proj_dir_save, &p);
-                        }
-                    },
-                }
-                if !proj.read().theme_history.is_empty() {
-                    div { class: "theme-history",
-                        p { class: "theme-history-label", "Recent:" }
-                        div { class: "theme-chips",
-                            for entry in proj.read().theme_history.clone().iter() {
-                                {
-                                    let entry_clone = entry.clone();
-                                    let display = if entry.len() > 60 { format!("{}…", &entry[..57]) } else { entry.clone() };
-                                    let proj_dir_save = project_dir.clone();
-                                    rsx! {
-                                        button {
-                                            class: "theme-chip",
-                                            title: "{entry_clone}",
-                                            onclick: move |_| {
-                                                let mut p = proj.write();
-                                                p.theme_prompt = entry_clone.clone();
-                                                save_project_state(&proj_dir_save, &p);
-                                            },
-                                            "{display}"
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // ---- Generate buttons ----
-            div { class: "generate-row",
-                button {
-                    class: "btn btn-primary btn-generate",
-                    disabled: is_busy,
-                    onclick: move |_| on_generate_ai(()),
-                    if matches!(*phase.read(), AppPhase::GeneratingAi | AppPhase::Resizing) {
-                        span { class: "spinner" }
-                        " Generating AI…"
-                    } else {
-                        {icon_sparkle()}
-                        "Generate AI Screenshots"
-                    }
-                }
-                button {
-                    class: "btn btn-generate btn-manual",
-                    disabled: is_busy,
-                    onclick: move |_| on_generate_manual(()),
-                    if matches!(*phase.read(), AppPhase::GeneratingManual) {
-                        span { class: "spinner spinner-dark" }
-                        " Generating…"
-                    } else {
-                        {icon_image()}
-                        "Generate Manual Screenshots"
-                    }
-                }
-            }
-
-            // ---- Error banner ----
-            if let AppPhase::Error(ref msg) = *phase.read() {
-                div { class: "card error-card", role: "alert",
-                    p {
-                        {icon_alert()}
-                        "{msg}"
-                    }
-                    button {
-                        class: "btn btn-dismiss",
-                        onclick: move |_| phase.set(AppPhase::Idle),
-                        "Dismiss"
-                    }
-                }
-            }
-
-            // ---- Bottom output panel ----
-            div { class: "card output-panel",
-                // Tabs
-                div { class: "output-tabs",
-                    button {
-                        class: if *output_tab.read() == OutputTab::Progress { "output-tab active" } else { "output-tab" },
-                        onclick: move |_| output_tab.set(OutputTab::Progress),
-                        "Progress"
-                        if !log_lines.read().is_empty() {
-                            span { class: "tab-badge", "{log_lines.read().len()}" }
-                        }
-                    }
-                    button {
-                        class: if *output_tab.read() == OutputTab::GeneratedImages { "output-tab active" } else { "output-tab" },
-                        onclick: move |_| output_tab.set(OutputTab::GeneratedImages),
-                        "Generated Images"
-                        if !proj.read().generated_urls.is_empty() {
-                            span { class: "tab-badge", "{proj.read().generated_urls.len()}" }
-                        }
-                    }
-                    button {
-                        class: if *output_tab.read() == OutputTab::SavedScreenshots { "output-tab active" } else { "output-tab" },
-                        onclick: move |_| output_tab.set(OutputTab::SavedScreenshots),
-                        "Saved Screenshots"
-                        if !proj.read().output_paths.is_empty() {
-                            span { class: "tab-badge", "{proj.read().output_paths.len()}" }
-                        }
-                    }
-                    button {
-                        // Publish and Build are operations, not views of
-                        // output — the group-end rule separates them from the
-                        // three result tabs while keeping one active signal.
-                        class: if *output_tab.read() == OutputTab::Publish { "output-tab active output-tab-publish output-tab-group-end" } else { "output-tab output-tab-publish output-tab-group-end" },
-                        onclick: move |_| output_tab.set(OutputTab::Publish),
-                        {icon_upload()}
-                        "Publish"
-                    }
-                    button {
-                        class: if *output_tab.read() == OutputTab::Build { "output-tab active output-tab-build" } else { "output-tab output-tab-build" },
-                        onclick: move |_| output_tab.set(OutputTab::Build),
-                        {icon_wrench()}
-                        "Build"
-                        if matches!(*build_phase.read(), BuildPhase::Running(_)) {
-                            span { class: "spinner spinner-dark" }
-                        }
-                    }
-                }
-
-                // Tab content
-                div { class: "output-content",
-                    match *output_tab.read() {
-                        OutputTab::Progress => rsx! {
-                            if log_lines.read().is_empty() {
-                                p { class: "output-empty", "Progress will appear here when you generate screenshots." }
-                            } else {
-                                div { class: "log-scroll",
-                                    for line in log_lines.read().iter() {
-                                        p { class: "log-line", "{line}" }
-                                    }
-                                }
-                            }
-                        },
-                        OutputTab::GeneratedImages => rsx! {
-                            if proj.read().generated_urls.is_empty() {
-                                p { class: "output-empty", "Generated previews will appear here." }
-                            } else {
-                                div { class: "preview-grid",
-                                    for (i, url) in proj.read().generated_urls.clone().iter().enumerate() {
-                                        {
-                                            let url = url.clone();
-                                            rsx! {
-                                                div { class: "preview-item",
-                                                    p { class: "preview-label", "Screen {i + 1}" }
-                                                    img { class: "preview-img", src: "{url}", alt: "Generated screenshot {i + 1}" }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        },
-                        OutputTab::SavedScreenshots => rsx! {
-                            if proj.read().output_paths.is_empty() {
-                                p { class: "output-empty", "Saved file paths will appear here." }
-                            } else {
-                                for (label, path) in proj.read().output_paths.clone().iter() {
-                                    {
-                                        let label = label.clone();
-                                        let path_str = path.to_string_lossy().to_string();
-                                        rsx! {
-                                            div { class: "output-row",
-                                                span { class: "output-label", "{label}" }
-                                                span { class: "output-path", "{path_str}" }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        },
-                        OutputTab::Publish => rsx! {
-                            div { class: "publish-panel",
-                                // Status / info
-                                div { class: "publish-info",
-                                    p { class: "publish-desc",
-                                        "Upload screenshots to App Store Connect via "
-                                        strong { "fastlane upload_screenshots" }
-                                        ". Make sure you have generated screenshots first and set "
-                                        code { "APP_STORE_CONNECT_API_KEY_*" }
-                                        " environment variables."
-                                    }
-                                    div { class: "publish-status-row",
-                                        match *publish_phase.read() {
-                                            PublishPhase::Idle => rsx! {
-                                                span { class: "publish-status publish-idle", "Ready" }
-                                            },
-                                            PublishPhase::Running => rsx! {
-                                                span { class: "spinner" }
-                                                span { class: "publish-status publish-running", " Uploading…" }
-                                            },
-                                            PublishPhase::Success => rsx! {
-                                                span { class: "publish-status publish-success",
-                                                    {icon_check()}
-                                                    "Uploaded successfully"
-                                                }
-                                            },
-                                            PublishPhase::Error(ref msg) => rsx! {
-                                                span { class: "publish-status publish-error",
-                                                    {icon_alert()}
-                                                    "{msg}"
-                                                }
-                                            },
-                                        }
-                                    }
-                                }
-
-                                // Publish button
-                                button {
-                                    class: "btn btn-publish",
-                                    disabled: matches!(*publish_phase.read(), PublishPhase::Running),
-                                    onclick: move |_| on_publish(()),
-                                    if matches!(*publish_phase.read(), PublishPhase::Running) {
-                                        span { class: "spinner" }
-                                        " Uploading to App Store Connect…"
-                                    } else {
-                                        {icon_upload()}
-                                        "Upload to App Store Connect"
-                                    }
-                                }
-
-                                // Output log
-                                if !publish_log.read().is_empty() {
-                                    div { class: "publish-log",
-                                        p { class: "publish-log-label", "fastlane output:" }
-                                        div { class: "log-scroll publish-log-scroll",
-                                            for line in publish_log.read().iter() {
-                                                {
-                                                    let line = line.clone();
-                                                    // Color error/warning lines differently
-                                                    let cls = if line.to_lowercase().contains("error") || line.starts_with("✗") {
-                                                        "log-line log-error"
-                                                    } else if line.to_lowercase().contains("warning") || line.starts_with("⚠") {
-                                                        "log-line log-warn"
-                                                    } else {
-                                                        "log-line"
-                                                    };
-                                                    rsx! { p { class: "{cls}", "{line}" } }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // ── Android / Google Play section ──────────────
-                                hr { class: "publish-divider" }
-                                div { class: "publish-info",
-                                    p { class: "publish-desc",
-                                        "Upload Android screenshots to Google Play via "
-                                        strong { "androidpublisher v3" }
-                                        ". Set "
-                                        code { "GOOGLE_PLAY_JSON_KEY" }
-                                        " (path to service-account JSON) in "
-                                        code { "fastlane/.env" }
-                                        " or the environment."
-                                    }
-                                    div { class: "publish-status-row",
-                                        match *android_publish_phase.read() {
-                                            AndroidPublishPhase::Idle => rsx! {
-                                                span { class: "publish-status publish-idle", "Ready" }
-                                            },
-                                            AndroidPublishPhase::Running => rsx! {
-                                                span { class: "spinner" }
-                                                span { class: "publish-status publish-running", " Uploading…" }
-                                            },
-                                            AndroidPublishPhase::Success => rsx! {
-                                                span { class: "publish-status publish-success",
-                                                    {icon_check()}
-                                                    "Uploaded successfully"
-                                                }
-                                            },
-                                            AndroidPublishPhase::Error(ref msg) => rsx! {
-                                                span { class: "publish-status publish-error",
-                                                    {icon_alert()}
-                                                    "{msg}"
-                                                }
-                                            },
-                                        }
-                                    }
-                                }
-                                button {
-                                    class: "btn btn-publish btn-publish-android",
-                                    disabled: matches!(*android_publish_phase.read(), AndroidPublishPhase::Running),
-                                    onclick: move |_| on_android_publish(()),
-                                    if matches!(*android_publish_phase.read(), AndroidPublishPhase::Running) {
-                                        span { class: "spinner" }
-                                        " Uploading to Google Play…"
-                                    } else {
-                                        {icon_play()}
-                                        "Upload to Google Play"
-                                    }
-                                }
-                                if !android_publish_log.read().is_empty() {
-                                    div { class: "publish-log",
-                                        p { class: "publish-log-label", "androidpublisher output:" }
-                                        div { class: "log-scroll publish-log-scroll",
-                                            for line in android_publish_log.read().iter() {
-                                                {
-                                                    let line = line.clone();
-                                                    let cls = if line.to_lowercase().contains("error") || line.starts_with("✗") {
-                                                        "log-line log-error"
-                                                    } else if line.starts_with("✅") || line.starts_with("🎉") {
-                                                        "log-line log-success"
-                                                    } else {
-                                                        "log-line"
-                                                    };
-                                                    rsx! { p { class: "{cls}", "{line}" } }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        },
-                        OutputTab::Build => rsx! {
-                            div { class: "build-panel",
-                                // Status row
-                                div { class: "build-status-row",
-                                    match build_phase.read().clone() {
-                                        BuildPhase::Idle => rsx! {
-                                            span { class: "build-status build-idle", "Ready — scripts will be created in project folder if missing." }
-                                        },
-                                        BuildPhase::Running(ref name) => rsx! {
-                                            span { class: "spinner" }
-                                            span { class: "build-status build-running", " Running {name}…" }
-                                        },
-                                        BuildPhase::Success(ref name) => rsx! {
-                                            span { class: "build-status build-success",
-                                                {icon_check()}
-                                                "{name} completed successfully"
-                                            }
-                                        },
-                                        BuildPhase::Error(ref msg) => rsx! {
-                                            span { class: "build-status build-error",
-                                                {icon_alert()}
-                                                "{msg}"
-                                            }
-                                        },
-                                    }
-                                }
-
-                                // Build buttons
-                                div { class: "build-buttons",
-                                    // iOS
-                                    div { class: "build-platform-group",
-                                        p { class: "build-platform-title build-ios-title", "iOS" }
-                                        button {
-                                            class: "btn btn-build btn-build-ios",
-                                            disabled: matches!(*build_phase.read(), BuildPhase::Running(_)),
-                                            onclick: {
-                                                let mut on_run = on_run_script.clone();
-                                                move |_| on_run("build_ios_distribution.sh".into())
-                                            },
-                                            if matches!(*build_phase.read(), BuildPhase::Running(ref n) if n == "build_ios_distribution.sh") {
-                                                span { class: "spinner" }
-                                                " Building IPA…"
-                                            } else {
-                                                {icon_phone()}
-                                                "Build iOS IPA"
-                                            }
-                                        }
-                                    }
-
-                                    // Android
-                                    div { class: "build-platform-group",
-                                        p { class: "build-platform-title build-android-title", "Android" }
-                                        button {
-                                            class: "btn btn-build btn-build-android",
-                                            disabled: matches!(*build_phase.read(), BuildPhase::Running(_)),
-                                            onclick: {
-                                                let mut on_run = on_run_script.clone();
-                                                move |_| on_run("build_android_release.sh".into())
-                                            },
-                                            if matches!(*build_phase.read(), BuildPhase::Running(ref n) if n == "build_android_release.sh") {
-                                                span { class: "spinner" }
-                                                " Building AAB…"
-                                            } else {
-                                                {icon_package()}
-                                                "Build AAB (Google Play)"
-                                            }
-                                        }
-                                        button {
-                                            class: "btn btn-build btn-build-android-secondary",
-                                            disabled: matches!(*build_phase.read(), BuildPhase::Running(_)),
-                                            onclick: {
-                                                let mut on_run = on_run_script.clone();
-                                                move |_| on_run("build_apk.sh".into())
-                                            },
-                                            if matches!(*build_phase.read(), BuildPhase::Running(ref n) if n == "build_apk.sh") {
-                                                span { class: "spinner spinner-dark" }
-                                                " Building…"
-                                            } else {
-                                                {icon_download()}
-                                                "Build APK (Test Device)"
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // Output log
-                                if !build_log.read().is_empty() {
-                                    div { class: "publish-log",
-                                        p { class: "publish-log-label", "Output:" }
-                                        div { class: "log-scroll publish-log-scroll build-log-scroll",
-                                            for line in build_log.read().iter() {
-                                                {
-                                                    let line = line.clone();
-                                                    let cls = if line.to_lowercase().contains("error") || line.starts_with("❌") {
-                                                        "log-line log-error"
-                                                    } else if line.to_lowercase().contains("warning") || line.starts_with("⚠") {
-                                                        "log-line log-warn"
-                                                    } else if line.starts_with("✅") || line.starts_with("🎉") {
-                                                        "log-line log-success"
-                                                    } else {
-                                                        "log-line"
-                                                    };
-                                                    rsx! { p { class: "{cls}", "{line}" } }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        },
-                    }
-                }
-            }
-        }
-    }
-}
-
-// iOS-only (fastlane/Xcode signing — meaningless on an Android build
-// regardless of file access), and rfd has no Android backend to fall back to.
-#[cfg(not(target_os = "android"))]
-fn provisioning_profile_browse_button(mut settings: Signal<Settings>) -> Element {
-    rsx! {
-        button {
-            class: "btn settings-browse-btn",
-            onclick: move |_| {
-                spawn(async move {
-                    if let Some(f) = rfd::AsyncFileDialog::new()
-                        .set_title("Select Provisioning Profile")
-                        .add_filter("Provisioning Profile", &["mobileprovision"])
-                        .pick_file().await
-                    {
-                        settings.write().provisioning_profile = f.path().to_string_lossy().to_string();
-                        save_settings(&settings());
-                    }
-                });
-            },
-            "Browse…"
-        }
-    }
-}
-#[cfg(target_os = "android")]
-fn provisioning_profile_browse_button(_settings: Signal<Settings>) -> Element {
-    rsx! {}
-}
-
-// ---------------------------------------------------------------------------
 // Settings popup (gear)
 // ---------------------------------------------------------------------------
 #[component]
@@ -4204,85 +1993,6 @@ fn SettingsPopup(on_close: EventHandler<()>) -> Element {
     let fal_key_val = settings.read().fal_key.clone();
     let phone_style_val = settings.read().phone_style.clone();
     let inference_steps_val = settings.read().inference_steps;
-    let apple_identity_val = settings.read().apple_identity.clone();
-    let provisioning_profile_val = settings.read().provisioning_profile.clone();
-    let ios_short_version_val = settings.read().ios_short_version.clone();
-
-    // Discover signing identities from the system keychain on mount.
-    let mut identities = use_signal(|| Vec::<String>::new());
-    use_effect(move || {
-        spawn(async move {
-            let found = tokio::task::spawn_blocking(|| {
-                std::process::Command::new("security")
-                    .args(["find-identity", "-v", "-p", "codesigning"])
-                    .output()
-                    .ok()
-                    .and_then(|o| String::from_utf8(o.stdout).ok())
-                    .map(|out| {
-                        out.lines()
-                            .filter_map(|line| {
-                                // Lines look like:  1) HASH "Identity Name (TEAMID)"
-                                let q = line.find('"')?;
-                                let rest = &line[q + 1..];
-                                let end = rest.rfind('"')?;
-                                Some(rest[..end].to_string())
-                            })
-                            .filter(|id| id.starts_with("Apple Distribution") || id.starts_with("Apple Development"))
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default()
-            }).await.unwrap_or_default();
-            identities.set(found);
-        });
-    });
-
-    // Discover provisioning profiles from the system directory on mount.
-    // Each entry is (display_label, full_path).
-    let mut profiles = use_signal(|| Vec::<(String, String)>::new());
-    use_effect(move || {
-        spawn(async move {
-            let found = tokio::task::spawn_blocking(|| {
-                let dir = dirs::home_dir()
-                    .unwrap_or_default()
-                    .join("Library/MobileDevice/Provisioning Profiles");
-                let Ok(entries) = std::fs::read_dir(&dir) else { return vec![]; };
-                let mut list: Vec<(String, String)> = entries
-                    .filter_map(|e| e.ok())
-                    .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("mobileprovision"))
-                    .filter_map(|e| {
-                        let path = e.path();
-                        // Extract Name from the plist embedded inside the binary profile.
-                        // The profile is a CMS blob; the XML plist is readable as plain text.
-                        let bytes = std::fs::read(&path).ok()?;
-                        let text = String::from_utf8_lossy(&bytes);
-                        // Find <key>Name</key>\n\t<string>VALUE</string>
-                        let name = text.find("<key>Name</key>")
-                            .and_then(|i| {
-                                let after = &text[i + "<key>Name</key>".len()..];
-                                let start = after.find("<string>")? + "<string>".len();
-                                let end = after[start..].find("</string>")?;
-                                Some(after[start..start + end].trim().to_string())
-                            })
-                            .unwrap_or_else(|| {
-                                path.file_stem()
-                                    .unwrap_or_default()
-                                    .to_string_lossy()
-                                    .to_string()
-                            });
-                        Some((name, path.to_string_lossy().to_string()))
-                    })
-                    .collect();
-                // Sort: Distribution profiles first, then alphabetically
-                list.sort_by(|a, b| {
-                    let a_dist = a.0.to_lowercase().contains("distribution") || a.0.to_lowercase().contains("appstore");
-                    let b_dist = b.0.to_lowercase().contains("distribution") || b.0.to_lowercase().contains("appstore");
-                    b_dist.cmp(&a_dist).then(a.0.cmp(&b.0))
-                });
-                list
-            }).await.unwrap_or_default();
-            profiles.set(found);
-        });
-    });
 
     rsx! {
         div { class: "settings-backdrop", onclick: move |_| on_close.call(()) }
@@ -4357,104 +2067,6 @@ fn SettingsPopup(on_close: EventHandler<()>) -> Element {
                     },
                 }
                 p { class: "settings-hint", "More steps = better quality but slower (10–50)" }
-            }
-
-            // ---- iOS Signing (shared across all projects) ----
-            p { class: "settings-section-title", "iOS Signing (all projects)" }
-
-            div { class: "settings-field",
-                label { "Apple Distribution Identity" }
-                if identities.read().is_empty() {
-                    // Keychain not yet queried or no identities found — fall back to text input
-                    input {
-                        class: "text-input",
-                        placeholder: "Apple Distribution: Name (TEAMID)",
-                        value: "{apple_identity_val}",
-                        oninput: move |e: Event<FormData>| { settings.write().apple_identity = e.value(); save_settings(&settings()); },
-                    }
-                    p { class: "settings-hint", "No signing identities found in keychain." }
-                } else {
-                    select {
-                        class: "text-input",
-                        value: "{apple_identity_val}",
-                        onchange: move |e: Event<FormData>| {
-                            settings.write().apple_identity = e.value();
-                            save_settings(&settings());
-                        },
-                        // Blank sentinel so the dropdown shows "choose…" when nothing is saved yet
-                        if apple_identity_val.is_empty() {
-                            option { value: "", disabled: true, selected: true, "— choose identity —" }
-                        }
-                        for id in identities.read().iter() {
-                            {
-                                let id = id.clone();
-                                let selected = id == apple_identity_val;
-                                rsx! {
-                                    option { value: "{id}", selected: selected, "{id}" }
-                                }
-                            }
-                        }
-                    }
-                    p { class: "settings-hint",
-                        "Loaded from keychain · Distribution identities listed first"
-                    }
-                }
-            }
-
-            div { class: "settings-field",
-                label { "Provisioning Profile" }
-                if profiles.read().is_empty() {
-                    // No profiles discovered — fall back to manual path input + Browse
-                    div { class: "settings-path-row",
-                        input {
-                            class: "text-input",
-                            placeholder: "/Users/you/Downloads/YourApp.mobileprovision",
-                            value: "{provisioning_profile_val}",
-                            oninput: move |e: Event<FormData>| {
-                                settings.write().provisioning_profile = e.value();
-                                save_settings(&settings());
-                            },
-                        }
-                        {provisioning_profile_browse_button(settings)}
-                    }
-                    p { class: "settings-hint", "No profiles found in ~/Library/MobileDevice/Provisioning Profiles" }
-                } else {
-                    select {
-                        class: "text-input",
-                        value: "{provisioning_profile_val}",
-                        onchange: move |e: Event<FormData>| {
-                            settings.write().provisioning_profile = e.value();
-                            save_settings(&settings());
-                        },
-                        if provisioning_profile_val.is_empty() {
-                            option { value: "", disabled: true, selected: true, "— choose profile —" }
-                        }
-                        for (label, path) in profiles.read().iter() {
-                            {
-                                let path = path.clone();
-                                let label = label.clone();
-                                let selected = path == provisioning_profile_val;
-                                rsx! {
-                                    option { value: "{path}", selected: selected, "{label}" }
-                                }
-                            }
-                        }
-                    }
-                    p { class: "settings-hint",
-                        "Loaded from ~/Library/MobileDevice/Provisioning Profiles · Distribution profiles listed first"
-                    }
-                }
-            }
-
-            div { class: "settings-field",
-                label { "iOS App Version" }
-                input {
-                    class: "text-input settings-short-input",
-                    placeholder: "1.0",
-                    value: "{ios_short_version_val}",
-                    oninput: move |e: Event<FormData>| { settings.write().ios_short_version = e.value(); save_settings(&settings()); },
-                }
-                p { class: "settings-hint", "CFBundleShortVersionString, e.g. 1.0" }
             }
 
             div { class: "settings-field settings-path",
@@ -4693,41 +2305,63 @@ async fn download_image(url: &str) -> Result<Vec<u8>, String> {
 // ---------------------------------------------------------------------------
 // Resize to targets
 // ---------------------------------------------------------------------------
+/// Where a generation run saves its images, and which sizes are ticked
+/// (one bool per entry of IOS_TARGETS / ANDROID_TARGETS / DESKTOP_TARGETS;
+/// an empty list exports nothing for that platform).
+#[derive(Clone)]
+struct ExportTargets {
+    /// `fastlane/screenshots/ios`
+    ios_dir: PathBuf,
+    /// `fastlane/metadata/android`
+    android_root: PathBuf,
+    /// `fastlane/screenshots/desktop`
+    desktop_dir: PathBuf,
+    ios: Vec<bool>,
+    android: Vec<bool>,
+    desktop: Vec<bool>,
+}
+
+impl ExportTargets {
+    fn for_project(project_dir: &std::path::Path, p: &ProjectState) -> Self {
+        let fastlane = project_dir.join("fastlane");
+        Self {
+            ios_dir: fastlane.join("screenshots").join("ios"),
+            android_root: fastlane.join("metadata").join("android"),
+            desktop_dir: fastlane.join("screenshots").join("desktop"),
+            ios: if p.export_ios { p.ios_targets.clone() } else { vec![] },
+            android: if p.export_android { p.android_targets.clone() } else { vec![] },
+            desktop: if p.platform_type.has_desktop() { p.desktop_targets.clone() } else { vec![] },
+        }
+    }
+}
+
+/// Resize one composited screen to every enabled target and save it.
+///
+/// iOS goes to `fastlane/screenshots/ios/<locale>/`, desktop to
+/// `fastlane/screenshots/desktop/<locale>/`, Android to fastlane supply's
+/// layout: `<play-lang>/images/phoneScreenshots/NN.png` and, from the first
+/// screen only (Play shows one), `<play-lang>/images/featureGraphic.png`.
+/// Every label carries `[<locale>]` so uploads can pick each language's files.
 fn resize_to_targets(
     image_bytes: &[u8],
     screen_index: usize,
-    total_screens: usize,
     locale: &str,
-    fastlane_path: &str,
-    ios_enabled: &[bool],
-    android_enabled: &[bool],
+    play_locale: &str,
+    targets: &ExportTargets,
 ) -> Result<Vec<(String, PathBuf)>, String> {
     let img = image::load_from_memory(image_bytes)
         .map_err(|e| format!("Failed to decode image: {e}"))?
         .to_rgba8();
 
-    let android_dir = PathBuf::from("output");
-    std::fs::create_dir_all(&android_dir)
-        .map_err(|e| format!("Failed to create output dir: {e}"))?;
-
     let mut results = Vec::new();
 
-    for (ti, &(key, device_name, tw, th)) in IOS_TARGETS.iter().enumerate() {
-        if !ios_enabled.get(ti).copied().unwrap_or(true) { continue; }
+    for (ti, &(_, device_name, tw, th)) in IOS_TARGETS.iter().enumerate() {
+        if !targets.ios.get(ti).copied().unwrap_or(false) { continue; }
         let resized = fill_and_crop(&img, tw, th);
-        let path = if !fastlane_path.is_empty() {
-            let locale_dir = PathBuf::from(fastlane_path).join(locale);
-            std::fs::create_dir_all(&locale_dir)
-                .map_err(|e| format!("Failed to create locale dir: {e}"))?;
-            locale_dir.join(format!("{device_name}-{screen_index:02}.png"))
-        } else {
-            let name = if total_screens == 1 {
-                format!("{key}.png")
-            } else {
-                format!("screen_{screen_index}_{key}.png")
-            };
-            android_dir.join(name)
-        };
+        let locale_dir = targets.ios_dir.join(locale);
+        std::fs::create_dir_all(&locale_dir)
+            .map_err(|e| format!("Failed to create locale dir: {e}"))?;
+        let path = locale_dir.join(format!("{device_name}-{screen_index:02}.png"));
         // App Store Connect rejects PNGs with an alpha channel (IMAGE_ALPHA_NOT_ALLOWED).
         // Flatten alpha onto white before saving iOS screenshots.
         flatten_alpha_onto_white(&resized)
@@ -4739,24 +2373,35 @@ fn resize_to_targets(
         ));
     }
 
+    let images_dir = targets.android_root.join(play_locale).join("images");
     for (ti, &(key, label, tw, th)) in ANDROID_TARGETS.iter().enumerate() {
-        if !android_enabled.get(ti).copied().unwrap_or(true) { continue; }
-        let resized = fill_and_crop(&img, tw, th);
-        let name = if total_screens == 1 {
-            format!("{key}.png")
-        } else {
-            format!("screen_{screen_index}_{key}.png")
+        if !targets.android.get(ti).copied().unwrap_or(false) { continue; }
+        let path = match key {
+            "android_feature" if screen_index == 1 => images_dir.join("featureGraphic.png"),
+            "android_feature" => continue,
+            _ => images_dir.join("phoneScreenshots").join(format!("{screen_index:02}.png")),
         };
-        let path = android_dir.join(&name);
-        resized
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)
+                .map_err(|e| format!("Failed to create {}: {e}", dir.display()))?;
+        }
+        fill_and_crop(&img, tw, th)
             .save(&path)
-            .map_err(|e| format!("Failed to save {name}: {e}"))?;
-        let full_label = if total_screens == 1 {
-            label.to_string()
-        } else {
-            format!("Screen {screen_index} → {label}")
-        };
-        results.push((full_label, path));
+            .map_err(|e| format!("Failed to save {}: {e}", path.display()))?;
+        results.push((format!("{label} [{locale}] #{screen_index}"), path));
+    }
+
+    for (ti, &(key, name, tw, th)) in DESKTOP_TARGETS.iter().enumerate() {
+        if !targets.desktop.get(ti).copied().unwrap_or(false) { continue; }
+        let locale_dir = targets.desktop_dir.join(locale);
+        std::fs::create_dir_all(&locale_dir)
+            .map_err(|e| format!("Failed to create {}: {e}", locale_dir.display()))?;
+        let path = locale_dir.join(format!("{key}-{screen_index:02}.png"));
+        // The Mac App Store refuses alpha just like iOS does.
+        flatten_alpha_onto_white(&fill_and_crop(&img, tw, th))
+            .save(&path)
+            .map_err(|e| format!("Failed to save {}: {e}", path.display()))?;
+        results.push((format!("Desktop {name} [{locale}] #{screen_index}"), path));
     }
 
     Ok(results)
@@ -5112,6 +2757,11 @@ async fn asc_find_app(jwt: &str, bundle_id: &str) -> Result<String, String> {
         .send().await.map_err(|e| e.to_string())?
         .json().await.map_err(|e| e.to_string())?;
 
+    if let Some(err) = resp["errors"].as_array().and_then(|e| e.first()) {
+        let title = err["title"].as_str().unwrap_or("App Store Connect error");
+        let detail = err["detail"].as_str().unwrap_or("");
+        return Err(format!("{title}: {detail}"));
+    }
     resp["data"].as_array()
         .and_then(|arr| arr.first())
         .and_then(|app| app["id"].as_str())
