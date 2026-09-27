@@ -1587,8 +1587,9 @@ fn App() -> Element {
     rsx! {
         // ── Update banner ──────────────────────────────────────────────────
         // Renders only when a newer release exists AND the user hasn't dismissed
-        // it this session. Click "Download" to open the GitHub releases page in
-        // the system browser (Dioxus opens external links via the OS handler).
+        // it this session. "Download" opens this OS's build in the system
+        // browser, which downloads it (Dioxus opens external links via the OS
+        // handler).
         if let (Some(info), false) = (update_info.read().clone(), *update_dismissed.read()) {
             div { class: "update-banner",
                 span { class: "update-banner-text",
