@@ -15,6 +15,13 @@ Each heading is dated on the day its tag was pushed. Releases that carried only
 build or packaging work say so rather than being hidden: the version numbers a
 user sees in the update prompt should all be accounted for.
 
+## [Unreleased]
+
+### Changed
+
+- The update banner now links directly to the OS-specific build, making it
+  easier to download the latest version.
+
 ## [0.1.13] - 2026-09-24
 
 ### Fixed
