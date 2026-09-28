@@ -815,18 +815,10 @@ fn script_android_release(
     version_name: &str,
     version_code: u32,
 ) -> String {
-    // Generate right keystore config based on project_slug
+    // Signing comes from the project's environment (.env), never from this
+    // template: the generated script sits in the project folder and this
+    // source is public. The key alias defaults to the slug.
     let slug_lower = project_slug.to_lowercase();
-    let is_abjad = slug_lower == "abjad";
-    // abjad has its own legacy keystore; all other apps share mayorana-release.keystore.
-    let keystore_path = if is_abjad {
-        "$HOME/code/temp_antigravity_abjad/keystores/reset_upload_key.jks"
-    } else {
-        "$HOME/code/dioxus/keystores/mayorana-release.keystore"
-    };
-    let key_alias_val = if is_abjad { "upload".to_string() } else { slug_lower.clone() };
-    // Password for mayorana-release.keystore; abjad uses its own keystore with "android".
-    let key_pass_snippet = if is_abjad { r#"KEY_PASS="android""# } else { r#"KEY_PASS="Salma2026!""# };
 
     // android_bundle_id is passed directly — callers already resolved iOS vs Android split.
     let android_package = bundle_id;
@@ -846,9 +838,17 @@ fn script_android_release(
 set -e
 
 PROJECT_NAME="{project_slug}"
-KEYSTORE_PATH="{keystore_path}"
-KEY_ALIAS="{key_alias_val}"
-{key_pass_snippet}
+
+# Signing — set in the project's .env (AppScreens passes it in):
+#   ANDROID_KEYSTORE_PATH       upload keystore (.jks / .keystore)
+#   ANDROID_KEYSTORE_PASSWORD   its password
+#   ANDROID_KEY_ALIAS           optional, defaults to the project slug
+#   ANDROID_KEY_PASSWORD        optional, defaults to the keystore password
+KEYSTORE_PATH="${{ANDROID_KEYSTORE_PATH:-}}"
+KEYSTORE_PATH="${{KEYSTORE_PATH/#\~/$HOME}}"
+KEY_ALIAS="${{ANDROID_KEY_ALIAS:-{slug_lower}}}"
+KEY_PASS="${{ANDROID_KEYSTORE_PASSWORD:-}}"
+KEY_PASSWORD="${{ANDROID_KEY_PASSWORD:-$KEY_PASS}}"
 
 export ANDROID_HOME="$HOME/Library/Android/sdk"
 export ANDROID_NDK_HOME="$ANDROID_HOME/ndk"
@@ -858,11 +858,33 @@ export ANDROID_NDK_HOME="$ANDROID_NDK_HOME/$NDK_VERSION"
 echo "🚀 Starting Android Release Build (AAB)..."
 echo "NDK: $NDK_VERSION"
 
-# 0. Check keystore
+# 0. Check tools
+if [ -z "$NDK_VERSION" ]; then
+    echo "❌ Android NDK not found in $ANDROID_HOME/ndk"
+    echo "   Install it in Android Studio: SDK Manager → SDK Tools → NDK (Side by side)."
+    exit 1
+fi
+# dx refuses to bundle a project whose Dioxus library is a different version.
+DX_VERSION=$(dx --version 2>/dev/null | awk '{{print $2}}')
+LIB_VERSION=$(awk '/^name = "dioxus"$/ {{ getline; gsub(/version = |"/, ""); print; exit }}' Cargo.lock 2>/dev/null)
+if [ -n "$DX_VERSION" ] && [ -n "$LIB_VERSION" ] && [ "$DX_VERSION" != "$LIB_VERSION" ]; then
+    echo "❌ dx is $DX_VERSION but this project uses dioxus $LIB_VERSION — they must match."
+    echo "   Either move the project to dx's version:  cargo update -p dioxus --precise $DX_VERSION"
+    echo "   or install the matching dx:               cargo install dioxus-cli --version $LIB_VERSION --locked"
+    exit 1
+fi
+
+# 0b. Check signing
+if [ -z "$KEYSTORE_PATH" ] || [ -z "$KEY_PASS" ]; then
+    echo "❌ Android signing is not set up. Add to the project's .env:"
+    echo "   ANDROID_KEYSTORE_PATH=/path/to/upload-keystore.jks"
+    echo "   ANDROID_KEYSTORE_PASSWORD=<its password>"
+    exit 1
+fi
 if [ ! -f "$KEYSTORE_PATH" ]; then
     echo "❌ Keystore not found: $KEYSTORE_PATH"
-    echo "   Create it with:"
-    echo "   keytool -genkey -v -keystore \$KEYSTORE_PATH -alias $KEY_ALIAS -keyalg RSA -keysize 2048 -validity 10000"
+    echo "   Create an upload key with:"
+    echo "   keytool -genkeypair -v -keystore \"$KEYSTORE_PATH\" -alias $KEY_ALIAS -keyalg RSA -keysize 2048 -validity 10000"
     exit 1
 fi
 
@@ -871,7 +893,13 @@ echo "🧹 Cleaning previous release build..."
 rm -rf "target/dx/$PROJECT_NAME/release/android"
 
 echo "📦 Running dx bundle..."
+# dx's own final Gradle step can fail (duplicate icons); that is patched and
+# rebuilt below. What must exist is the Gradle project dx generates first.
 dx bundle --platform android --release || true
+if [ ! -f "target/dx/$PROJECT_NAME/release/android/app/app/build.gradle.kts" ]; then
+    echo "❌ dx bundle stopped before generating the Android project — see its error above."
+    exit 1
+fi
 
 # 2. Resource & Icon Fixes
 echo "🎨 Fixing resources and icons..."
@@ -937,7 +965,7 @@ if ! grep -q "signingConfigs" "$BUILD_GRADLE"; then
                 storeFile = file(\"$ABS_KEYSTORE_PATH\")\\
                 storePassword = \"$KEY_PASS\"\\
                 keyAlias = \"$KEY_ALIAS\"\\
-                keyPassword = \"$KEY_PASS\"\\
+                keyPassword = \"$KEY_PASSWORD\"\\
             }}\\
         }}\\
 " "$BUILD_GRADLE"

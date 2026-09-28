@@ -387,6 +387,16 @@ pub(super) fn AccountsStep() -> Element {
                 p { class: "settings-hint",
                     "Set GOOGLE_PLAY_JSON_KEY to the service account's JSON key file, in the project's .env or fastlane/.env. The account needs release access to this app in Play Console."
                 }
+
+                p { class: "export-section-label", "Upload key (signs your AABs)" }
+                ul { class: "check-list",
+                    for c in creds.android_signing.iter().cloned() {
+                        {check_row(ws, c.ok, c.label, c.detail, None)}
+                    }
+                }
+                p { class: "settings-hint",
+                    "Set ANDROID_KEYSTORE_PATH and ANDROID_KEYSTORE_PASSWORD in the project's .env (ANDROID_KEY_ALIAS if the alias isn't the project slug). Keep the keystore outside the project folder and backed up."
+                }
             }
         }
 
