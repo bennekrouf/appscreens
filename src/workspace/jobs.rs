@@ -642,7 +642,7 @@ pub(super) fn run_build(ws: Ws, script_name: String) {
 
         let mut cmd = std::process::Command::new("bash");
         cmd.arg(&script_path).current_dir(&dir).env("CI", "1");
-        for (k, v) in load_env(&[dir.join(".env")]) {
+        for (k, v) in load_env(&[dir.join(".env"), dir.join("fastlane").join(".env")]) {
             cmd.env(k, v);
         }
         match stream_command(cmd, &script_name, build_log).await {

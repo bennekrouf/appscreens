@@ -408,6 +408,20 @@ mod tests {
     }
 
     #[test]
+    fn android_release_script_takes_signing_from_the_environment() {
+        let script = script_android_release("Nahw", "nahw", "com.example.nahw", "1.0.0", 6);
+        assert!(!script.contains("Salma"), "no password in the generated script");
+        assert!(!script.contains("mayorana-release.keystore"));
+        assert!(script.contains(r#"KEY_ALIAS="${ANDROID_KEY_ALIAS:-nahw}""#));
+        assert!(script.contains(r#"KEYSTORE_PATH="${ANDROID_KEYSTORE_PATH:-}""#));
+        // The template is format!-escaped bash; make sure it still parses.
+        let path = std::env::temp_dir().join("appscreens-test-android-release.sh");
+        std::fs::write(&path, &script).unwrap();
+        let check = std::process::Command::new("bash").arg("-n").arg(&path).output().unwrap();
+        assert!(check.status.success(), "{}", String::from_utf8_lossy(&check.stderr));
+    }
+
+    #[test]
     fn seeds_numbers_after_the_last_used_ones() {
         let dir = std::env::temp_dir().join("appscreens-test-seed");
         std::fs::create_dir_all(&dir).unwrap();

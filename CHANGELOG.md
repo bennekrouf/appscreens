@@ -15,6 +15,24 @@ Each heading is dated on the day its tag was pushed. Releases that carried only
 build or packaging work say so rather than being hidden: the version numbers a
 user sees in the update prompt should all be accounted for.
 
+## [Unreleased]
+
+### Changed
+
+- Android release builds take their signing key from the project's `.env`
+  (`ANDROID_KEYSTORE_PATH`, `ANDROID_KEYSTORE_PASSWORD`, and optionally
+  `ANDROID_KEY_ALIAS`) instead of a fixed keystore location, so you can use
+  your own upload key and keep its password out of the build script. The
+  Accounts step shows whether the keystore is found and the password is set.
+
+### Fixed
+
+- Android release builds stop straight away with a clear message when the
+  Android NDK is not installed, when the installed `dx` and the project's
+  Dioxus version do not match (with the command that fixes it), or when `dx`
+  fails before creating the Android project. They used to carry on and end in
+  a cascade of unrelated "No such file" errors.
+
 ## [0.1.16] - 2026-09-28
 
 ### Changed
@@ -51,6 +69,25 @@ user sees in the update prompt should all be accounted for.
   attention, running, done).
 - Builds, screenshot generation and uploads run in a jobs drawer at the bottom
   and keep going while you move between steps.
+- The signing identity and provisioning profile moved from Settings to the
+  Accounts step, and the app version to the Version step. The provisioning
+  profile is now chosen per project, since each profile belongs to one app;
+  Settings keeps the fal.ai key, device style and inference steps.
+
+### Fixed
+
+- Android screenshots are saved inside the project, one set per language, in
+  fastlane's folder layout. They used to land wherever AppScreens was started
+  from, and each language overwrote the one before, so every language got the
+  same images on Google Play.
+- Google Play gets a single feature graphic per language, taken from the first
+  screen. Every screen used to produce one, but Play keeps only one.
+- Google Play uploads for Arabic, Hindi, Turkish and Chinese (Simplified) now
+  use the language codes Play accepts; they were rejected before.
+- Desktop screenshot sizes are exported. Desktop projects get a landscape
+  layout: captions on top with the whole window fitted below, or an AI-drawn
+  laptop frame.
+- Unticking iOS or Android under Sizes stops that platform from being exported.
 
 ### Added
 

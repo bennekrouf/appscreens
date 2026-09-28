@@ -101,7 +101,7 @@ jobs:
           key: release-macos-arm64-cargo-${{ hashFiles('Cargo.lock') }}
 
       - name: Install dioxus-cli
-        run: cargo install dioxus-cli --locked
+        run: cargo install dioxus-cli --version 0.7.10 --locked  # keep in step with the dioxus version in Cargo.toml
 
       # ── Sanity-check required signing secrets up front ─────────────────────
       - name: Verify macOS signing secrets are present
@@ -269,7 +269,7 @@ jobs:
             pkg-config
 
       - name: Install dioxus-cli
-        run: cargo install dioxus-cli --locked
+        run: cargo install dioxus-cli --version 0.7.10 --locked  # keep in step with the dioxus version in Cargo.toml
 
       - name: Bundle
         run: dx bundle --platform desktop --release --package-types deb --package-types appimage
@@ -311,7 +311,7 @@ jobs:
           key: release-windows-cargo-${{ hashFiles('Cargo.lock') }}
 
       - name: Install dioxus-cli
-        run: cargo install dioxus-cli --locked
+        run: cargo install dioxus-cli --version 0.7.10 --locked  # keep in step with the dioxus version in Cargo.toml
 
       # ── Windows code signing ───────────────────────────────────────────────
       # Unconfigured repos still build; the .msi just ships unsigned and
@@ -599,27 +599,37 @@ jobs:
           fi
           printf '%s\n\n' "Every version, with its notes: **[mayorana.ch/en/apps/appscreens/releases](https://mayorana.ch/en/apps/appscreens/releases)**" >> notes.md
 
-          # The standing download instructions, appended below whatever this
-          # release changed. Quoted heredoc: the shell must not touch the
-          # backticks in the snippets.
-          cat >> notes.md <<'EOF'
-          ## Download
-
-          ### macOS (Apple Silicon)
-          Download the `.dmg`, open it, and drag AppScreens to /Applications.
-          Signed with Apple Developer ID and notarized — opens with a normal double-click.
-
-          ### Linux
-          - **Debian / Ubuntu**: download the `.deb` and `sudo dpkg -i AppScreens_*.deb`
-          - **Other distros**: download the `.AppImage`, `chmod +x` it, and run
-
-          ### Windows
-          Download the `.msi` installer and run it. Windows SmartScreen may warn — click *More info → Run anyway* (the binary is unsigned).
-
-          ## For mayorana.ch
-          `latest.json` is attached to this release with download URLs and SHA-256 hashes.
-          Stable link: https://mayorana.ch/downloads/appscreens/latest/latest.json
-          EOF
+          # Download links, taken from this release's latest.json. The builds
+          # live on mayorana.ch, not on this page, and builds before 0.1.15
+          # send their "Download" button here — so each OS gets a real link,
+          # not an instruction to download a file this page doesn't have.
+          python3 - release/latest.json >> notes.md <<'PY'
+          import json, sys
+          p = json.load(open(sys.argv[1])).get("platforms", {})
+          def link(os, fmt):
+              url = p.get(os, {}).get(fmt, {}).get("url")
+              return f"[{url.rsplit('/', 1)[-1]}]({url})" if url else None
+          out = ["## Download", ""]
+          if (dmg := link("macos", "dmg")):
+              out += ["### macOS (Apple Silicon)",
+                      f"Download {dmg}, open it, and drag AppScreens to /Applications.",
+                      "Signed with Apple Developer ID and notarized — opens with a normal double-click.", ""]
+          deb, appimage = link("linux", "deb"), link("linux", "appimage")
+          if deb or appimage:
+              out += ["### Linux"]
+              if deb:
+                  out += [f"- **Debian / Ubuntu**: download {deb} and install it with `sudo dpkg -i` on the file"]
+              if appimage:
+                  out += [f"- **Other distros**: download {appimage}, `chmod +x` it, and run"]
+              out += [""]
+          if (msi := link("windows", "msi")):
+              out += ["### Windows",
+                      f"Download {msi} and run it. Windows SmartScreen may warn — click *More info → Run anyway* (the binary is unsigned).", ""]
+          out += ["## For mayorana.ch",
+                  "`latest.json` is attached to this release with download URLs and SHA-256 hashes.",
+                  "Stable link: https://mayorana.ch/downloads/appscreens/latest/latest.json"]
+          print("\n".join(out))
+          PY
 
           gh release create "$TAG" \
             --title "AppScreens $TAG" \

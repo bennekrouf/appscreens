@@ -176,6 +176,8 @@ struct CredCheck {
 struct Creds {
     app_store: Vec<CredCheck>,
     play: Vec<CredCheck>,
+    /// Upload keystore for signing release AABs (build side, not the store's)
+    android_signing: Vec<CredCheck>,
 }
 
 impl Creds {
@@ -184,6 +186,9 @@ impl Creds {
     }
     fn play_ok(&self) -> bool {
         self.play.iter().all(|c| c.ok)
+    }
+    fn android_signing_ok(&self) -> bool {
+        self.android_signing.iter().all(|c| c.ok)
     }
 }
 
@@ -201,7 +206,12 @@ fn read_creds(dir: &std::path::Path) -> Creds {
         Some(_) => CredCheck { label, ok: true, detail: format!("{key} is set") },
         None => CredCheck { label, ok: false, detail: format!("{key} is not set") },
     };
-    let file = |label: &'static str, key: &str| match resolve(key) {
+    // `~/…` as the build script expands it
+    let expand = |path: String| match path.strip_prefix("~/") {
+        Some(rest) => dirs::home_dir().map(|h| h.join(rest).to_string_lossy().to_string()).unwrap_or(path),
+        None => path,
+    };
+    let file = |label: &'static str, key: &str| match resolve(key).map(expand) {
         Some(path) if std::path::Path::new(&path).is_file() => {
             CredCheck { label, ok: true, detail: path }
         }
@@ -215,6 +225,10 @@ fn read_creds(dir: &std::path::Path) -> Creds {
             file("Private key (.p8)", "APP_STORE_CONNECT_API_KEY_KEY_FILEPATH"),
         ],
         play: vec![file("Service-account JSON", "GOOGLE_PLAY_JSON_KEY")],
+        android_signing: vec![
+            file("Upload keystore", "ANDROID_KEYSTORE_PATH"),
+            value("Keystore password", "ANDROID_KEYSTORE_PASSWORD"),
+        ],
     }
 }
 
@@ -420,6 +434,7 @@ impl Ws {
                 }
                 if plat.has_android() {
                     checks.push(creds.play_ok() && untested_or_ok(&self.play_test.read()));
+                    checks.push(creds.android_signing_ok());
                 }
                 match checks.iter().filter(|ok| **ok).count() {
                     n if n == checks.len() => StepStatus::Done,
