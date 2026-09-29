@@ -300,6 +300,132 @@ pub(crate) fn selected() -> Option<Jdk> {
     recommend(&jdks, DEFAULT_GRADLE).or_else(|| jdks.first().cloned())
 }
 
+/// The chosen JDK (from the Java card) if one is set and still exists.
+pub(crate) fn chosen() -> Option<Jdk> {
+    let home = PREFERRED.read().ok().and_then(|p| p.clone())?;
+    installed().into_iter().find(|j| j.home == home).or_else(|| probe(&home, "Chosen"))
+}
+
+/// Which Java a build of this project runs on, and anything worth telling
+/// the developer about how it was picked. A JDK that can't run the project's
+/// Gradle is never used: the build falls back to one that can, instead of
+/// failing ten minutes in.
+pub(crate) fn pick_for_build(
+    chosen: Option<Jdk>,
+    env: Option<Jdk>,
+    installed: &[Jdk],
+    gradle: (u32, u32),
+) -> (Option<Jdk>, Vec<String>) {
+    let mut notes = Vec::new();
+    let fallback = recommend(installed, gradle);
+    let mut skip = |j: &Jdk, what: &str| {
+        if let Some(p) = incompatibility(j, gradle) {
+            notes.push(match &fallback {
+                Some(f) => format!("{what} {p}; building with Java {} ({}) instead", f.version, f.source),
+                None => format!("{what} {p}, and no installed Java fits — install one in the Java card"),
+            });
+            false
+        } else {
+            true
+        }
+    };
+    if let Some(j) = chosen.filter(|j| skip(j, "The Java picked in AppScreens:")) {
+        return (Some(j), notes);
+    }
+    if let Some(j) = env.filter(|j| skip(j, "JAVA_HOME:")) {
+        return (Some(j), notes);
+    }
+    (fallback.or_else(|| installed.first().cloned()), notes)
+}
+
+/// Java for everything AppScreens runs in `project` (Doctor, builds).
+pub(crate) fn for_project(project: &Path, env_java_home: Option<&str>) -> (Option<Jdk>, Vec<String>) {
+    let (gradle, _) = project_gradle(project);
+    let env = env_java_home.filter(|h| !h.is_empty()).and_then(|h| probe(Path::new(h), "JAVA_HOME"));
+    pick_for_build(chosen(), env, &installed(), gradle)
+}
+
+/// A Java problem recognised in a failed build's log.
+#[derive(Clone, PartialEq, Debug)]
+pub(crate) enum BuildJavaIssue {
+    /// Gradle (or its Groovy/Kotlin compiler) can't run on this Java
+    Incompatible(u32),
+    /// A tool in the build needs at least this Java
+    NeedsAtLeast(u32),
+    /// No usable Java at all
+    Missing,
+}
+
+impl BuildJavaIssue {
+    pub(crate) fn explain(&self, gradle: (u32, u32)) -> String {
+        match self {
+            BuildJavaIssue::Incompatible(m) if *m > max_java_for_gradle(gradle) => format!(
+                "The build failed because Java {m} is too new for Gradle {}.{} (it runs on Java up to {}).",
+                gradle.0,
+                gradle.1,
+                max_java_for_gradle(gradle)
+            ),
+            BuildJavaIssue::Incompatible(m) => format!("The build failed because Gradle can't run on Java {m}."),
+            BuildJavaIssue::NeedsAtLeast(n) => format!("The build failed because it needs Java {n} or newer."),
+            BuildJavaIssue::Missing => "The build failed because it couldn't find Java.".into(),
+        }
+    }
+}
+
+/// The number right after `marker` in `line`.
+fn number_after(line: &str, marker: &str) -> Option<u32> {
+    let rest = &line[line.find(marker)? + marker.len()..];
+    let digits: String = rest.trim_start().chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
+}
+
+/// Recognise the ways Gradle, the Android plugin and the JDK report a Java
+/// mismatch — they all word it differently.
+pub(crate) fn diagnose_build_log(lines: &[String]) -> Option<BuildJavaIssue> {
+    for l in lines {
+        // Class file 52 = Java 8, so Java = class version - 44.
+        if let Some(v) = number_after(l, "Unsupported class file major version") {
+            return Some(BuildJavaIssue::Incompatible(v.saturating_sub(44)));
+        }
+        if let Some(m) = number_after(l, "configured to use incompatible Java")
+            .or_else(|| number_after(l, "Unsupported Java. Your build is currently configured to use Java"))
+        {
+            return Some(BuildJavaIssue::Incompatible(m));
+        }
+        if l.contains("You are currently using Java") {
+            if let Some(n) = number_after(l, "requires Java") {
+                return Some(BuildJavaIssue::NeedsAtLeast(n));
+            }
+        }
+        if let Some(n) = number_after(l, "requires at least JVM runtime version")
+            .or_else(|| number_after(l, "Gradle requires JVM"))
+        {
+            return Some(BuildJavaIssue::NeedsAtLeast(n));
+        }
+        if l.contains("Unable to locate a Java Runtime")
+            || l.contains("JAVA_HOME is not set and no 'java' command")
+            || l.contains("JAVA_HOME is set to an invalid directory")
+        {
+            return Some(BuildJavaIssue::Missing);
+        }
+    }
+    None
+}
+
+/// The installed JDK that fixes `issue`, if there is one.
+pub(crate) fn remedy(installed: &[Jdk], gradle: (u32, u32), issue: &BuildJavaIssue) -> Option<Jdk> {
+    let fits: Vec<Jdk> = installed
+        .iter()
+        .filter(|j| match issue {
+            BuildJavaIssue::Incompatible(m) => j.major != *m,
+            BuildJavaIssue::NeedsAtLeast(n) => j.major >= *n,
+            BuildJavaIssue::Missing => true,
+        })
+        .cloned()
+        .collect();
+    recommend(&fits, gradle)
+}
+
 // ---------------------------------------------------------------------------
 // Installing a JDK
 // ---------------------------------------------------------------------------
@@ -465,6 +591,58 @@ mod tests {
 
     fn jdk(major: u32, source: &'static str) -> Jdk {
         Jdk { home: format!("/jdk/{source}/{major}").into(), major, version: format!("{major}.0.1"), source }
+    }
+
+    #[test]
+    fn builds_never_use_a_java_gradle_cannot_run() {
+        let (j26, j25, j21) = (jdk(26, "Homebrew"), jdk(25, "Android Studio"), jdk(21, "Homebrew"));
+        let all = vec![j26.clone(), j25.clone(), j21.clone()];
+        let g91 = (9, 1);
+
+        // Nothing chosen: the recommended LTS.
+        assert_eq!(pick_for_build(None, None, &all, g91).0.unwrap().major, 21);
+        // A compatible choice is respected, silently.
+        let (j, notes) = pick_for_build(Some(j25.clone()), None, &all, g91);
+        assert_eq!((j.unwrap().major, notes.len()), (25, 0));
+        // Java 26 picked (or in JAVA_HOME) falls back to 21, and says so.
+        let (j, notes) = pick_for_build(Some(j26.clone()), None, &all, g91);
+        assert_eq!(j.unwrap().major, 21);
+        assert!(notes[0].contains("too new for Gradle 9.1") && notes[0].contains("Java 21"), "{notes:?}");
+        let (j, notes) = pick_for_build(None, Some(j26.clone()), &all, g91);
+        assert_eq!((j.unwrap().major, notes.len()), (21, 1));
+        // A compatible JAVA_HOME is used when nothing is chosen.
+        assert_eq!(pick_for_build(None, Some(j25), &all, g91).0.unwrap().major, 25);
+        // Only Java 26 installed: nothing fits, still returned so the build can report it.
+        let (j, notes) = pick_for_build(None, None, &[j26], g91);
+        assert_eq!(j.unwrap().major, 26);
+        assert!(notes.is_empty());
+    }
+
+    #[test]
+    fn diagnoses_java_failures_in_build_logs() {
+        let log = |s: &str| vec!["> Task :app:compile".to_string(), s.to_string()];
+        let d = diagnose_build_log(&log("BUG! exception in phase 'semantic analysis' in source unit '_BuildScript_' Unsupported class file major version 70"));
+        assert_eq!(d, Some(BuildJavaIssue::Incompatible(26)));
+        assert!(d.unwrap().explain((9, 1)).contains("too new for Gradle 9.1"));
+        assert_eq!(
+            diagnose_build_log(&log("Your build is currently configured to use incompatible Java 26.0.1 and Gradle 9.1.0.")),
+            Some(BuildJavaIssue::Incompatible(26))
+        );
+        assert_eq!(
+            diagnose_build_log(&log("  Android Gradle plugin requires Java 17 to run. You are currently using Java 11.")),
+            Some(BuildJavaIssue::NeedsAtLeast(17))
+        );
+        assert_eq!(
+            diagnose_build_log(&log("   > Dependency requires at least JVM runtime version 17. This build uses a Java 11 JVM.")),
+            Some(BuildJavaIssue::NeedsAtLeast(17))
+        );
+        assert_eq!(diagnose_build_log(&log("The operation couldn’t be completed. Unable to locate a Java Runtime.")), Some(BuildJavaIssue::Missing));
+        assert_eq!(diagnose_build_log(&log("error: linking with `cc` failed")), None);
+
+        let all = vec![jdk(26, "Homebrew"), jdk(25, "Android Studio"), jdk(21, "Homebrew"), jdk(11, "System")];
+        assert_eq!(remedy(&all, (9, 1), &BuildJavaIssue::Incompatible(26)).unwrap().major, 21);
+        assert_eq!(remedy(&all, (9, 1), &BuildJavaIssue::Incompatible(21)).unwrap().major, 25);
+        assert_eq!(remedy(&[jdk(26, "Homebrew")], (9, 1), &BuildJavaIssue::Incompatible(26)), None);
     }
 
     #[test]

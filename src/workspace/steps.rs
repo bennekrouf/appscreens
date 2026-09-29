@@ -442,6 +442,12 @@ fn DoctorCard() -> Element {
                                                         ws.go(step);
                                                         return;
                                                     }
+                                                    if let doctor::Fix::UseJava(home, major) = &fix {
+                                                        use_java(ws, home);
+                                                        fix_state.set(JobState::Ok(format!("Builds now use Java {major}")));
+                                                        rerun.with_mut(|n| *n += 1);
+                                                        return;
+                                                    }
                                                     let (fix, dir) = (fix.clone(), ws.dir());
                                                     fix_state.set(JobState::Running(format!("{}…", fix.label())));
                                                     spawn(async move {
@@ -470,6 +476,15 @@ fn DoctorCard() -> Element {
             }
         }
     }
+}
+
+/// Point the Java card (and everything AppScreens runs) at `home`; "" is
+/// Automatic.
+fn use_java(ws: Ws, home: &str) {
+    let mut settings = ws.settings;
+    settings.write().java_home = home.to_string();
+    save_settings(&settings.peek());
+    java::set_preferred(home);
 }
 
 /// Which Java AppScreens builds with — every JDK on the machine, checked
@@ -508,8 +523,12 @@ fn JavaCard() -> Element {
     let recommended = java::recommend(&list, gradle);
     let major = java::install_major(gradle);
     let options = installers().map(|i| java::install_options(java::current_os(), major, &i)).unwrap_or_default();
-    // `selected` probes a JVM; only ask once the scan is cached.
-    let current = jdks().is_some().then(java::selected).flatten();
+    // What builds will really run on: the pick, unless Gradle can't run on it.
+    let chosen_jdk = list.iter().find(|j| !chosen.is_empty() && j.home.to_string_lossy() == chosen).cloned();
+    let chosen_problem = chosen_jdk.as_ref().and_then(|j| java::incompatibility(j, gradle));
+    let env_jdk = list.iter().find(|j| j.source == "JAVA_HOME").cloned();
+    let (current, _) = java::pick_for_build(chosen_jdk, env_jdk, &list, gradle);
+    let current = current.filter(|_| jdks().is_some());
     let label = |j: &java::Jdk| {
         let problem = java::incompatibility(j, gradle).map(|p| format!(" — {p}")).unwrap_or_default();
         format!("Java {} · {} · {}{problem}", j.version, j.source, j.home.display())
@@ -555,6 +574,17 @@ fn JavaCard() -> Element {
                     }
                     for j in list.iter() {
                         option { value: "{j.home.display()}", selected: chosen == j.home.to_string_lossy(), "{label(j)}" }
+                    }
+                }
+            }
+            if let (Some(problem), Some(fix)) = (chosen_problem.clone(), recommended.clone()) {
+                div { class: "install-option",
+                    div { class: "check-text",
+                        span { class: "check-label hint-error", "The Java you picked can't build this project" }
+                        span { class: "check-detail", "{problem}. Builds use Java {fix.version} ({fix.source}) instead until you switch." }
+                    }
+                    div { class: "install-actions",
+                        button { class: "btn btn-sm", onclick: move |_| use_java(ws, ""), "Use Java {fix.major}" }
                     }
                 }
             }
@@ -644,7 +674,7 @@ fn JavaCard() -> Element {
                 }
             }
             if let Some(j) = current.clone() {
-                TerminalJava { jdk: j }
+                TerminalJava { jdk: j, gradle }
             }
             div { class: "conn-test",
                 button { class: "btn btn-sm", onclick: move |_| { jdks.set(None); rescan.with_mut(|n| *n += 1); }, "Scan again" }
@@ -656,7 +686,7 @@ fn JavaCard() -> Element {
 /// Opt-in: the same Java for the developer's own terminal, previewed,
 /// reversible, and proven by asking a fresh login shell what it gets.
 #[component]
-fn TerminalJava(jdk: java::Jdk) -> Element {
+fn TerminalJava(jdk: java::Jdk, gradle: (u32, u32)) -> Element {
     let ws = use_context::<Ws>();
     let target = use_hook(shellenv::detect_target);
     let mut refresh = use_signal(|| 0u32);
@@ -678,6 +708,21 @@ fn TerminalJava(jdk: java::Jdk) -> Element {
         shellenv::Target::WindowsUser => format!("JAVA_HOME = {home}\nPath += %JAVA_HOME%\\bin"),
     };
     let where_ = target.describe();
+    // What the last check found wrong with the terminal's Java, if anything.
+    let terminal_problem = proof.read().iter().find(|(label, _)| label == "java").and_then(|(_, line)| {
+        if line.contains("not found") {
+            return Some(format!("New terminals have no java — {} to fix it", if up_to_date { "open a new window" } else { "add it above" }));
+        }
+        let (version, major) = java::parse_java_version(line)?;
+        let j = java::Jdk { home: Default::default(), major, version, source: "terminal" };
+        java::incompatibility(&j, gradle).map(|p| {
+            if up_to_date {
+                format!("New terminals run Java {major}: {p}. Something later in your shell setup overrides AppScreens' lines.")
+            } else {
+                format!("New terminals run Java {major}: {p}. Click \"{}\" to switch them to Java {}.", if st.installed.is_some() { "Switch to this Java" } else { "Add to my terminal" }, jdk.major)
+            }
+        })
+    });
 
     rsx! {
         details { class: "inline-form",
@@ -770,8 +815,55 @@ fn TerminalJava(jdk: java::Jdk) -> Element {
                         }
                     }
                 }
+                match &terminal_problem {
+                    Some(p) => rsx! { p { class: "settings-hint hint-error", {icon_alert()} " {p}" } },
+                    None => rsx! { p { class: "settings-hint", {icon_check()} " Your terminal's Java works with Gradle {gradle.0}.{gradle.1}." } },
+                }
             }
             div { class: "publish-status-row", {job_status_line(state(), "")} }
+        }
+    }
+}
+
+/// A build that failed on a Java mismatch: say so in plain words and offer
+/// to build again with a Java that fits.
+#[component]
+fn BuildJavaFix() -> Element {
+    let ws = use_context::<Ws>();
+    let failed = matches!(*ws.build_phase.read(), BuildPhase::Error(_));
+    let issue = use_memo(move || {
+        if !matches!(*ws.build_phase.read(), BuildPhase::Error(_)) {
+            return None;
+        }
+        java::diagnose_build_log(&ws.build_log.read())
+    });
+    let Some(issue) = issue().filter(|_| failed) else {
+        return rsx! {};
+    };
+    let (gradle, _) = java::project_gradle(&ws.dir());
+    let fix = java::remedy(&java::installed(), gradle, &issue);
+    let script = ws.last_build.read().clone();
+
+    rsx! {
+        div { class: "card build-status-card",
+            div { class: "check-text",
+                span { class: "check-label hint-error", {icon_alert()} " {issue.explain(gradle)}" }
+                match &fix {
+                    Some(j) => rsx! { span { class: "check-detail", "Java {j.version} ({j.source}) is installed and works with Gradle {gradle.0}.{gradle.1}." } },
+                    None => rsx! { span { class: "check-detail", "No installed Java fits — install Java {java::install_major(gradle)} in the Java card above, then build again." } },
+                }
+            }
+            if let Some(j) = fix {
+                button {
+                    class: "btn btn-sm",
+                    disabled: script.is_empty(),
+                    onclick: move |_| {
+                        use_java(ws, &j.home.to_string_lossy());
+                        jobs::run_build(ws, script.clone());
+                    },
+                    "Build again with Java {j.major}"
+                }
+            }
         }
     }
 }
@@ -811,6 +903,7 @@ pub(super) fn BuildStep() -> Element {
                 button { class: "btn btn-sm", onclick: move |_| ws.show_job(JobKind::Build), "Show log" }
             }
         }
+        BuildJavaFix {}
 
         div { class: "platform-cards",
             if plat.has_ios() {
