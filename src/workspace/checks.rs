@@ -55,7 +55,7 @@ impl ProfileInfo {
 /// Value of the first `<string>`/`<date>` after `<key>{key}</key>` in the
 /// plist embedded in a profile. The profile is a CMS blob, but that plist is
 /// stored as plain XML inside it.
-fn plist_value(text: &str, key: &str) -> Option<String> {
+pub(super) fn plist_value(text: &str, key: &str) -> Option<String> {
     let after = &text[text.find(&format!("<key>{key}</key>"))?..];
     let (open, close) = ["<string>", "<date>"]
         .into_iter()

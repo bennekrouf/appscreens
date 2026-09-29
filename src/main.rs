@@ -80,6 +80,19 @@ struct Settings {
     provisioning_profile: String, // absolute path to .mobileprovision
     #[serde(default = "default_ios_short_version")]
     ios_short_version: String,    // e.g. "1.0"
+    // Signing material shared by every project (one developer, one team)
+    /// Android upload keystore; its password lives in the Keychain
+    #[serde(default)]
+    android_keystore_path: String,
+    /// Folder holding keys and certificates, outside every project ("" = ~/keys)
+    #[serde(default)]
+    keys_dir: String,
+    /// When the last encrypted backup of the keys folder was written (UTC)
+    #[serde(default)]
+    last_backup_at: String,
+    /// Where it was written
+    #[serde(default)]
+    last_backup_path: String,
 }
 
 fn default_phone_style() -> String {
@@ -100,6 +113,10 @@ impl Default for Settings {
             apple_identity: String::new(),
             provisioning_profile: String::new(),
             ios_short_version: "1.0".to_string(),
+            android_keystore_path: String::new(),
+            keys_dir: String::new(),
+            last_backup_at: String::new(),
+            last_backup_path: String::new(),
         }
     }
 }
@@ -319,6 +336,9 @@ struct ProjectState {
     /// What was shipped, newest first
     #[serde(default)]
     releases: Vec<ReleaseRecord>,
+    /// Alias of this app's key in the upload keystore ("" = the project slug)
+    #[serde(default)]
+    android_key_alias: String,
 }
 
 /// Store text for one locale. Limits are the stores' own.

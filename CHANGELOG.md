@@ -15,6 +15,57 @@ Each heading is dated on the day its tag was pushed. Releases that carried only
 build or packaging work say so rather than being hidden: the version numbers a
 user sees in the update prompt should all be accounted for.
 
+## [Unreleased]
+
+### Added
+
+- The Accounts step can now set up signing without a terminal: create an
+  Android upload keystore (or add a key for another app to it) and get the
+  certificate Play Console asks for, create an Apple Distribution certificate
+  straight into your keychain, and regenerate an invalid App Store profile.
+- Passwords for the upload keystore are kept in the macOS Keychain instead of
+  a plain-text `.env` file (a `.env` still works and takes priority).
+- The Accounts step warns when `.env` files, keys, keystores or service-account
+  files are committed in the project, and can stop tracking them for you.
+- An encrypted backup of your whole keys folder in one file, with a reminder
+  until you have one and again whenever your keys change — so a lost or stolen
+  Mac no longer means revoking and recreating every key.
+- The Build step checks your build tools before you build: `dx` against the
+  project's Dioxus version, the Android SDK, NDK, target platform, build tools
+  and Java, the Rust targets, Xcode and your signing identity. Each problem says
+  how to fix it, and several have a button that does it for you — instead of
+  finding them one failed build at a time.
+- Every build is inspected before you upload it: which key signed the AAB
+  (compared with your upload key), its package, version and target API; and
+  for the IPA its bundle ID, version, distribution signature and profile.
+  Problems show under the build and in the Submit checklist.
+- Releasing to Google Play stops before the upload when the bundle's
+  versionCode isn't higher than one already on Play, instead of after it.
+- The App step checks that your app's own code and `.env` use the same Android
+  package as the app — store links, data paths and package constants — and
+  can correct them in one click. A mismatch used to ship silently: saved data
+  in the wrong place, a "rate us" link to a missing page, or an upload to a
+  different app.
+- The build check flags `Dioxus.toml` settings the installed `dx` ignores
+  (`target_sdk_version`, `min_sdk_version`) or rejects (`permissions = [...]`),
+  and a target API below what Google Play requires, and can rewrite them.
+- The App step warns when the project's code isn't safe from a lost Mac: not
+  in git, no remote, or commits that were never pushed.
+- The Submit step shows what the stores have right now — version states from
+  App Store Connect and every Play track's releases — with links to what only
+  the consoles show.
+- The Accounts step has an "If this Mac is lost or stolen" checklist: what to
+  revoke and replace, in order, filled in with this project's own key IDs and
+  linking straight to each console page.
+
+### Fixed
+
+- Signing and Android builds no longer fail with "Unable to locate a Java
+  Runtime" when AppScreens is started from the Dock or a terminal without Java
+  on its path. It now finds a Java installation by itself — `JAVA_HOME`,
+  macOS's registered Java, Android Studio's bundled runtime or Homebrew — and
+  hands it to the build.
+
 ## [0.1.17] - 2026-09-28
 
 ### Changed

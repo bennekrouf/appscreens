@@ -1996,6 +1996,38 @@ h2 {
 .history tr:last-child td { border-bottom: none; }
 .history td:first-child { color: var(--text3); white-space: nowrap; }
 
+.lost-steps { margin: var(--s2) 0 0; padding-left: var(--s5); font-size: var(--fs-sm); color: var(--text2); line-height: 1.6; }
+.lost-steps li { margin-bottom: var(--s2); }
+.lost-steps code { font-size: var(--fs-xs); background: var(--bg2); padding: 0 var(--s1); border-radius: var(--r-sm); }
+
+/* Build step: what the last build contains */
+.build-checks summary { cursor: pointer; font-size: var(--fs-sm); color: var(--text3); margin: var(--s1) 0 var(--s2); }
+.build-checks[open] summary { color: var(--text2); }
+
+/* Build step: prerequisites */
+.doctor { padding: var(--s3) var(--s4); margin-bottom: var(--s5); }
+.doctor summary { cursor: pointer; list-style: none; }
+.doctor summary::-webkit-details-marker { display: none; }
+.doctor[open] summary { margin-bottom: var(--s3); }
+.check-fix:disabled { opacity: 0.5; cursor: default; }
+
+/* Accounts: expandable "create …" forms inside a card */
+.inline-form {
+    margin: var(--s2) 0 var(--s4);
+    padding: var(--s3) var(--s4);
+    border: 1px dashed var(--border);
+    border-radius: var(--r-md);
+    background: var(--bg0);
+}
+.inline-form summary {
+    cursor: pointer;
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    color: var(--blue);
+}
+.inline-form[open] summary { margin-bottom: var(--s3); }
+.inline-form .build-config-grid { margin: var(--s3) 0; }
+
 /* Build step: "Next: 1.2.0 (15) [Change]" */
 .next-build {
     display: flex;
