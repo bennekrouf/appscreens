@@ -464,6 +464,8 @@ pub(crate) struct Ws {
     gen_log: Signal<Vec<String>>,
     build_phase: Signal<BuildPhase>,
     build_log: Signal<Vec<String>>,
+    /// The build script last started, to run it again after a fix
+    last_build: Signal<String>,
     ios_pub: Signal<PublishPhase>,
     ios_pub_log: Signal<Vec<String>>,
     play_pub: Signal<AndroidPublishPhase>,
@@ -780,6 +782,7 @@ pub(crate) fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> E
         gen_log: use_signal(Vec::new),
         build_phase: use_signal(|| BuildPhase::Idle),
         build_log: use_signal(Vec::new),
+        last_build: use_signal(String::new),
         ios_pub: use_signal(|| PublishPhase::Idle),
         ios_pub_log: use_signal(Vec::new),
         play_pub: use_signal(|| AndroidPublishPhase::Idle),

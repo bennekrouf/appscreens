@@ -67,6 +67,14 @@ user sees in the update prompt should all be accounted for.
   fits your project: Homebrew (inside AppScreens, no password) or the Temurin
   installer on macOS, your package manager in a terminal on Linux, winget on
   Windows — and picks it up as soon as it's done.
+- Android builds no longer start on a Java the project's Gradle can't run on.
+  If the Java you picked, or the one in `JAVA_HOME`, is too old or too new
+  (Java 26 with Gradle 9.1, for example), the build uses one that fits and says
+  so in the log. The Doctor and the Java card point it out, with a
+  one-click "Use Java 21".
+- When a build fails on a Java mismatch anyway, the Build step explains it in
+  plain words and offers "Build again with Java 21", using a Java you already
+  have installed.
 - If you want the same Java in your own terminal, the Java card can add it to
   your shell profile (zsh, bash or fish) or your Windows user settings. You see
   the exact lines first, your profile is backed up, and Remove takes them out

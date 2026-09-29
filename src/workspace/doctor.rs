@@ -19,6 +19,8 @@ pub(super) enum Fix {
     DioxusToml,
     /// Handled in another step
     GoTo(Step),
+    /// Switch the Java card to this JDK ("" = Automatic); applied by the UI
+    UseJava(String, u32),
 }
 
 impl Fix {
@@ -29,6 +31,7 @@ impl Fix {
             Fix::AndroidStudio => "Open Android Studio".into(),
             Fix::DioxusToml => "Fix Dioxus.toml".into(),
             Fix::GoTo(step) => format!("{} →", step.label()),
+            Fix::UseJava(_, major) => format!("Use Java {major}"),
         }
     }
 }
@@ -155,11 +158,23 @@ pub(super) fn run(dir: &Path, platform: &PlatformType, apple_identity: &str) -> 
         let platforms = dir_entries(&sdk.join("platforms"));
         let build_tools = dir_entries(&sdk.join("build-tools"));
         let (gradle, _) = java::project_gradle(dir);
-        let jdk = java::selected();
+        let env = load_env(&[dir.join(".env"), dir.join("fastlane").join(".env")]);
+        let env_java = env.get("JAVA_HOME").cloned().or_else(|| std::env::var("JAVA_HOME").ok());
+        let (jdk, java_notes) = java::for_project(dir, env_java.as_deref());
         let java_problem = match &jdk {
-            None => Some("No Java found — Gradle and keytool need one (Android Studio ships it; or brew install openjdk@21)".to_string()),
-            Some(j) => java::incompatibility(j, gradle),
+            None => Some(format!(
+                "No Java found — install Java {} in the Java card below (Android Studio also ships one)",
+                java::install_major(gradle)
+            )),
+            Some(j) => java::incompatibility(j, gradle)
+                .map(|p| format!("{p}, and no installed Java fits — install Java {} in the Java card below", java::install_major(gradle))),
         };
+        // A picked Java the build has to skip: one click puts the card back
+        // on one that works.
+        let java_fix = java::chosen()
+            .filter(|c| java::incompatibility(c, gradle).is_some())
+            .and(jdk.as_ref().filter(|_| java_problem.is_none()))
+            .map(|j| Fix::UseJava(String::new(), j.major));
         let rust_missing = missing(&ANDROID_RUST_TARGETS);
 
         items.push(DoctorItem {
@@ -200,11 +215,14 @@ pub(super) fn run(dir: &Path, platform: &PlatformType, apple_identity: &str) -> 
             label: "Java",
             ok: java_problem.is_none(),
             detail: match (&jdk, &java_problem) {
-                (_, Some(p)) => format!("{p} — choose another in the Java card below"),
-                (Some(j), None) => format!("Java {} · {} · works with Gradle {}.{}", j.version, j.source, gradle.0, gradle.1),
+                (_, Some(p)) => p.clone(),
+                (Some(j), None) if java_notes.is_empty() => {
+                    format!("Java {} · {} · works with Gradle {}.{}", j.version, j.source, gradle.0, gradle.1)
+                }
+                (Some(_), None) => java_notes.join(" · "),
                 (None, None) => unreachable!(),
             },
-            fix: None,
+            fix: java_fix,
         });
         items.push(DoctorItem {
             section: "Android",
@@ -288,7 +306,7 @@ pub(super) fn apply(dir: &Path, fix: &Fix) -> Result<String, String> {
             std::fs::write(&path, consistency::fix_dioxus_toml(&text)).map_err(|e| e.to_string())?;
             Ok("Dioxus.toml updated".into())
         }
-        Fix::GoTo(_) => Ok(String::new()),
+        Fix::GoTo(_) | Fix::UseJava(..) => Ok(String::new()),
     }
 }
 

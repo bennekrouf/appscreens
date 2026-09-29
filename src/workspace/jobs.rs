@@ -566,6 +566,8 @@ pub(super) fn run_build(ws: Ws, script_name: String) {
 
     build_phase.set(BuildPhase::Running(script_name.clone()));
     build_log.set(Vec::new());
+    let mut last_build = ws.last_build;
+    last_build.set(script_name.clone());
     ws.show_job(JobKind::Build);
 
     let dir = proj_dir.clone();
@@ -660,11 +662,25 @@ pub(super) fn run_build(ws: Ws, script_name: String) {
         if let (false, Some(pw)) = (env.contains_key("ANDROID_KEYSTORE_PASSWORD"), password) {
             cmd.env("ANDROID_KEYSTORE_PASSWORD", pw);
         }
-        // Gradle needs a JDK; one started from the Dock has no JAVA_HOME.
-        if !env.contains_key("JAVA_HOME") && std::env::var("JAVA_HOME").is_err() {
-            if let Some(home) = signing::java_home() {
-                cmd.env("JAVA_HOME", &home);
-            }
+        // Gradle needs a JDK it can run on: the one picked in the Java card,
+        // else the project's JAVA_HOME, else the best installed — never one
+        // too old or too new for the project's Gradle.
+        let env_java = env.get("JAVA_HOME").cloned().or_else(|| std::env::var("JAVA_HOME").ok());
+        let (jdk, notes) = if script_name.contains("ios") {
+            (None, Vec::new())
+        } else {
+            let dir = dir.clone();
+            tokio::task::spawn_blocking(move || java::for_project(&dir, env_java.as_deref())).await.unwrap_or_default()
+        };
+        for n in notes {
+            build_log.write().push(format!("⚠️  {n}"));
+        }
+        if let Some(j) = jdk {
+            build_log.write().push(format!("☕ Java {} ({}) · {}", j.version, j.source, j.home.display()));
+            let path = env.get("PATH").map(Into::into).or_else(|| std::env::var_os("PATH")).unwrap_or_default();
+            let path = std::env::join_paths(std::iter::once(j.home.join("bin")).chain(std::env::split_paths(&path)))
+                .unwrap_or(path);
+            cmd.env("JAVA_HOME", &j.home).env("PATH", path);
         }
         match stream_command(cmd, &script_name, build_log).await {
             Ok(()) => {
