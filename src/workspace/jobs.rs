@@ -632,6 +632,12 @@ pub(super) fn run_build(ws: Ws, script_name: String) {
         for name in &created {
             build_log.write().push(format!("📝 Created {name}"));
         }
+        if !created.contains(&script_name) && dir.join(&script_name).exists() {
+            build_log.write().push(format!(
+                "📌 Using your own {script_name} as it is — AppScreens only rewrites scripts it wrote. \
+                 Its version and build number come from the script, not the Version step."
+            ));
+        }
 
         // 2. Run the script
         let script_path = dir.join(&script_name);

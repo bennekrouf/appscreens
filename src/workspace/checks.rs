@@ -210,6 +210,162 @@ fn toml_value(text: &str, key: &str) -> Option<String> {
     })
 }
 
+/// `key = value` inside `[section]` only, unquoted.
+fn toml_in(text: &str, section: &str, key: &str) -> Option<String> {
+    let mut inside = false;
+    text.lines().find_map(|line| {
+        let t = line.trim();
+        if t.starts_with('[') {
+            inside = t == format!("[{section}]");
+            return None;
+        }
+        let (k, v) = t.split_once('=')?;
+        (inside && k.trim() == key).then(|| v.split('#').next().unwrap_or("").trim().trim_matches('"').to_string())
+    })
+    .filter(|v| !v.is_empty())
+}
+
+/// `NAME="value"` from a shell script, when it's a plain value (no `$…`).
+fn shell_var(text: &str, name: &str) -> Option<String> {
+    text.lines().find_map(|line| {
+        let v = line.trim().strip_prefix(&format!("{name}="))?;
+        let v = v.split(" #").next().unwrap_or(v).trim().trim_matches('"').trim_matches('\'');
+        (!v.is_empty() && !v.contains('$') && !v.contains('{')).then(|| v.to_string())
+    })
+}
+
+/// `app_identifier("…")` / `package_name("…")` from a fastlane Appfile.
+fn appfile_value(text: &str, call: &str) -> Option<String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with(&format!("{call}(")) || l.starts_with(&format!("{call} ")))
+        .find_map(|l| l.split(['"', '\'']).nth(1).map(str::to_string))
+        .filter(|v| !v.is_empty())
+}
+
+/// What a project already says about itself, from the files it has: build
+/// scripts, Dioxus.toml, Cargo.toml, fastlane, `.env` and the last builds.
+#[derive(Clone, PartialEq, Debug, Default)]
+pub(super) struct Detected {
+    pub app_name: Option<String>,
+    pub slug: Option<String>,
+    pub ios_bundle_id: Option<String>,
+    pub android_bundle_id: Option<String>,
+    pub version: Option<String>,
+    pub has_ios: bool,
+    pub has_android: bool,
+}
+
+pub(super) fn detect_identity(dir: &std::path::Path) -> Detected {
+    let read = |rel: &str| std::fs::read_to_string(dir.join(rel)).unwrap_or_default();
+    let dioxus = read("Dioxus.toml");
+    let cargo = read("Cargo.toml");
+    let ios_script = read("build_ios_distribution.sh");
+    let android_script = read("build_android_release.sh");
+    let appfile = read("fastlane/Appfile");
+    let env = load_env(&[dir.join(".env"), dir.join("fastlane").join(".env")]);
+    let first = |candidates: Vec<Option<String>>| candidates.into_iter().flatten().find(|v| !v.trim().is_empty());
+
+    // dx builds into target/dx/<Cargo package name>; the folder is the proof.
+    let dx_dirs: Vec<std::path::PathBuf> = std::fs::read_dir(dir.join("target/dx"))
+        .map(|d| d.flatten().map(|e| e.path()).filter(|p| p.join("release").is_dir()).collect())
+        .unwrap_or_default();
+    let cargo_name = toml_in(&cargo, "package", "name");
+    let slug = first(vec![
+        cargo_name.clone().filter(|n| dx_dirs.is_empty() || dx_dirs.iter().any(|d| d.ends_with(n))),
+        (dx_dirs.len() == 1).then(|| dx_dirs[0].file_name().unwrap_or_default().to_string_lossy().to_string()),
+        cargo_name,
+    ]);
+    let built = |platform: &str| slug.as_ref().is_some_and(|s| dir.join(format!("target/dx/{s}/release/{platform}")).is_dir());
+    let gradle = slug
+        .as_ref()
+        .and_then(|s| std::fs::read_to_string(dir.join(format!("target/dx/{s}/release/android/app/app/build.gradle.kts"))).ok())
+        .unwrap_or_default();
+    let bundle_identifier = first(vec![
+        toml_in(&dioxus, "bundle", "identifier"),
+        toml_in(&dioxus, "mobile", "bundle_identifier"),
+    ]);
+    let root_files: Vec<String> = std::fs::read_dir(dir)
+        .map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect())
+        .unwrap_or_default();
+    let has_file = |ext: &str| root_files.iter().any(|f| f.ends_with(ext));
+
+    Detected {
+        app_name: first(vec![
+            shell_var(&ios_script, "DISPLAY_NAME"),
+            toml_in(&dioxus, "mobile", "title"),
+            toml_in(&dioxus, "bundle", "name"),
+            shell_var(&ios_script, "APP_NAME"),
+            toml_in(&dioxus, "application", "name"),
+        ]),
+        ios_bundle_id: first(vec![
+            shell_var(&ios_script, "BUNDLE_ID"),
+            appfile_value(&appfile, "app_identifier"),
+            env.get("APP_IDENTIFIER").cloned(),
+            bundle_identifier.clone(),
+        ]),
+        // What the last Android build actually used beats what files say.
+        android_bundle_id: first(vec![
+            super::verify::gradle_value(&gradle, "applicationId"),
+            env.get("ANDROID_PACKAGE_NAME").cloned(),
+            appfile_value(&appfile, "package_name"),
+            shell_var(&android_script, "NEW_PACKAGE"),
+            toml_in(&dioxus, "android", "package"),
+            bundle_identifier,
+        ]),
+        version: first(vec![
+            shell_var(&ios_script, "VERSION"),
+            toml_in(&dioxus, "mobile.ios", "version"),
+            toml_in(&dioxus, "android", "version_name"),
+            shell_var(&android_script, "V_NAME"),
+        ])
+        .filter(|v| valid_version(v)),
+        has_ios: built("ios") || has_file(".ipa") || !ios_script.is_empty() || root_files.iter().any(|f| f == "Entitlements.plist"),
+        has_android: built("android") || has_file(".aab") || has_file(".apk") || !android_script.is_empty(),
+        slug,
+    }
+}
+
+/// Fill the App step from what the project already says, for fields still
+/// empty. A project nobody has set up yet also gets its platforms and
+/// version from its files. Returns whether anything changed.
+pub(super) fn seed_identity(p: &mut ProjectState, dir: &std::path::Path) -> bool {
+    let unconfigured = [&p.app_name, &p.project_slug, &p.ios_bundle_id, &p.android_bundle_id]
+        .iter()
+        .all(|f| f.trim().is_empty());
+    let d = detect_identity(dir);
+    let mut changed = false;
+    for (field, found) in [
+        (&mut p.app_name, &d.app_name),
+        (&mut p.project_slug, &d.slug),
+        (&mut p.ios_bundle_id, &d.ios_bundle_id),
+        (&mut p.android_bundle_id, &d.android_bundle_id),
+    ] {
+        if field.trim().is_empty() {
+            if let Some(v) = found {
+                *field = v.clone();
+                changed = true;
+            }
+        }
+    }
+    if unconfigured && changed {
+        let platform = match (d.has_ios, d.has_android) {
+            (true, false) => Some(PlatformType::Ios),
+            (false, true) => Some(PlatformType::Android),
+            _ => None,
+        };
+        if let Some(platform) = platform.filter(|pl| *pl != p.platform_type) {
+            p.platform_type = platform;
+        }
+        // The version may have been guessed from the global default before
+        // the project's own was readable.
+        if let Some(v) = d.version.filter(|v| *v != p.version) {
+            p.version = v;
+        }
+    }
+    changed
+}
+
 /// Fill in version, build numbers and profile for a project that predates
 /// them, from what used to own each value: the global version setting,
 /// `build_number.txt` (last iOS build used), `Dioxus.toml` (last Android
@@ -419,6 +575,82 @@ mod tests {
         std::fs::write(&path, &script).unwrap();
         let check = std::process::Command::new("bash").arg("-n").arg(&path).output().unwrap();
         assert!(check.status.success(), "{}", String::from_utf8_lossy(&check.stderr));
+    }
+
+    #[test]
+    fn detects_an_existing_project_from_its_files() {
+        let dir = std::env::temp_dir().join("appscreens-test-detect");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("target/dx/tafseel-quran/release/ios")).unwrap();
+        std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"tafseel-quran\"\nversion = \"1.1.0\"\n").unwrap();
+        std::fs::write(
+            dir.join("Dioxus.toml"),
+            "[application]\nname = \"TafseelQuran\"\n\n[mobile]\ntitle = \"Tafseel\"\nbundle_identifier = \"com.mayorana.tafseel\"\n\n\
+             [mobile.ios]\n# live is 1.0\nversion = \"1.1\"\nbuild_number = 12\n\n[bundle]\nidentifier = \"com.mayorana.tafseel\"\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("TafseelQuran.ipa"), "x").unwrap();
+        std::fs::write(dir.join("build_number.txt"), "12\n").unwrap();
+
+        // What AppScreens had saved before it could detect anything.
+        let mut p = ProjectState::with_defaults();
+        p.version = "1.0".into();
+        assert!(seed_identity(&mut p, &dir));
+        assert_eq!(p.app_name, "Tafseel");
+        assert_eq!(p.project_slug, "tafseel-quran", "dx's folder, not Dioxus.toml's name");
+        assert_eq!(p.ios_bundle_id, "com.mayorana.tafseel");
+        assert_eq!(p.android_bundle_id, "com.mayorana.tafseel");
+        assert_eq!(p.platform_type, PlatformType::Ios, "only iOS was ever built");
+        assert_eq!(p.version, "1.1");
+
+        // Once set, nothing is overwritten.
+        p.app_name = "Tafseel Quran".into();
+        p.version = "1.2".into();
+        assert!(!seed_identity(&mut p, &dir));
+        assert_eq!((p.app_name.as_str(), p.version.as_str()), ("Tafseel Quran", "1.2"));
+    }
+
+    #[test]
+    fn a_build_script_and_the_last_android_build_win() {
+        let dir = std::env::temp_dir().join("appscreens-test-detect-scripts");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("target/dx/nahw/release/android/app/app")).unwrap();
+        std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"nahw\"\n").unwrap();
+        std::fs::write(dir.join("Dioxus.toml"), "[bundle]\nidentifier = \"com.example.nahw\"\n").unwrap();
+        std::fs::write(
+            dir.join("build_ios_distribution.sh"),
+            "#!/bin/bash\nAPP_NAME=\"Nahw\"\nVERSION=\"2.0.1\"\nBUNDLE_ID=\"com.mayorana.tafseel.nahw\"\nDX=\"${DX:-dx}\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("target/dx/nahw/release/android/app/app/build.gradle.kts"),
+            "android {\n    defaultConfig {\n        applicationId = \"com.mayorana.nahw\"\n    }\n}\n",
+        )
+        .unwrap();
+        let d = detect_identity(&dir);
+        assert_eq!(d.app_name.as_deref(), Some("Nahw"));
+        assert_eq!(d.ios_bundle_id.as_deref(), Some("com.mayorana.tafseel.nahw"));
+        assert_eq!(d.android_bundle_id.as_deref(), Some("com.mayorana.nahw"));
+        assert_eq!(d.version.as_deref(), Some("2.0.1"));
+        assert!(d.has_ios && d.has_android);
+        assert_eq!(shell_var("DX=\"${DX:-dx}\"", "DX"), None, "not a plain value");
+    }
+
+    #[test]
+    fn never_replaces_a_build_script_it_did_not_write() {
+        let dir = std::env::temp_dir().join("appscreens-test-own-scripts");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mine = "#!/bin/bash\n# my tuned script\nDISPLAY_NAME=\"Tafseel\"\n";
+        std::fs::write(dir.join("build_ios_distribution.sh"), mine).unwrap();
+        let written = ensure_build_scripts(&dir, "Tafseel", "tafseel-quran", "com.a", "com.a", "id", "", "1.1", 13, 1);
+        assert!(!written.contains(&"build_ios_distribution.sh".to_string()));
+        assert_eq!(std::fs::read_to_string(dir.join("build_ios_distribution.sh")).unwrap(), mine);
+        // The ones it wrote carry the marker, so they're replaced next time.
+        let apk = std::fs::read_to_string(dir.join("build_apk.sh")).unwrap();
+        assert!(apk.starts_with(&format!("#!/bin/bash\n{SCRIPT_MARKER}\n")));
+        let again = ensure_build_scripts(&dir, "Tafseel", "tafseel-quran", "com.a", "com.a", "id", "", "1.1", 14, 2);
+        assert_eq!(again.len(), 3);
     }
 
     #[test]
