@@ -695,7 +695,9 @@ pub(crate) fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> E
     let dir = use_signal(|| project_dir.clone());
     let proj = use_signal(|| {
         let mut state = load_project_state(&project_dir);
-        if seed_release_fields(&mut state, &project_dir, &settings.peek()) {
+        // Identity first: the profile match below needs the bundle ID.
+        let identified = seed_identity(&mut state, &project_dir);
+        if seed_release_fields(&mut state, &project_dir, &settings.peek()) | identified {
             save_project_state(&project_dir, &state);
         }
         state

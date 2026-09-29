@@ -1203,8 +1203,12 @@ fi
 "##)
 }
 
-/// Always (re)write build scripts from the latest template.
-/// This ensures config changes and template fixes are always picked up.
+/// First lines of every script AppScreens writes; how it knows which ones it may replace.
+const SCRIPT_MARKER: &str = "# Written by AppScreens before each build — edits here are replaced.";
+
+/// (Re)write AppScreens' build scripts from the latest template, so config
+/// changes and template fixes are always picked up. Scripts the developer
+/// wrote are left alone.
 fn ensure_build_scripts(
     project_dir: &PathBuf,
     app_name: &str,
@@ -1236,9 +1240,26 @@ fn ensure_build_scripts(
         ),
     ];
 
+    // A script AppScreens didn't write is the developer's: it may carry fixes
+    // the template doesn't have (a display name, a minimum iOS), so it's used
+    // as-is, never replaced. Older AppScreens scripts are recognised by name.
+    let read = |name: &str| std::fs::read_to_string(project_dir.join(name)).ok();
+    let generated_here = scripts.iter().any(|(n, _)| read(n).is_some_and(|t| t.contains("AppScreens")));
+    let ours = |name: &str| match read(name) {
+        None => true,
+        Some(text) => {
+            text.contains("AppScreens")
+                || (generated_here && matches!(name, "build_android.sh" | "build_apk.sh"))
+        }
+    };
+
     let mut created = Vec::new();
     for (name, content) in scripts {
         let path = project_dir.join(name);
+        if !ours(name) {
+            continue;
+        }
+        let content = content.replacen("#!/bin/bash\n", &format!("#!/bin/bash\n{SCRIPT_MARKER}\n"), 1);
         if std::fs::write(&path, content).is_ok() {
             // Make executable
             #[cfg(unix)]

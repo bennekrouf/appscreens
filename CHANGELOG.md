@@ -15,6 +15,23 @@ Each heading is dated on the day its tag was pushed. Releases that carried only
 build or packaging work say so rather than being hidden: the version numbers a
 user sees in the update prompt should all be accounted for.
 
+## [Unreleased]
+
+### Added
+
+- Opening a project you've already built fills in the App step for you: the
+  app name, project slug, bundle ID and Android package come from your build
+  scripts, `Dioxus.toml`, `Cargo.toml`, fastlane and your last builds, and a
+  project that was only ever built for iOS (or Android) is set up for just
+  that platform. Fields you've filled in yourself are never changed.
+
+### Fixed
+
+- AppScreens no longer replaces a build script you wrote yourself. It used to
+  rewrite every build script from its template before each build, losing
+  changes like a display name or a minimum iOS version. Scripts it wrote are
+  still kept up to date.
+
 ## [0.1.18] - 2026-09-29
 
 ### Added
