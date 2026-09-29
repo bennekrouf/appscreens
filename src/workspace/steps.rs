@@ -472,6 +472,310 @@ fn DoctorCard() -> Element {
     }
 }
 
+/// Which Java AppScreens builds with — every JDK on the machine, checked
+/// against the project's Gradle version.
+#[component]
+fn JavaCard() -> Element {
+    let ws = use_context::<Ws>();
+    let mut settings = ws.settings;
+    let mut jdks = use_signal(|| Option::<Vec<java::Jdk>>::None);
+    let mut rescan = use_signal(|| 0u32);
+    let (gradle, detected) = java::project_gradle(&ws.dir());
+
+    use_effect(move || {
+        if rescan() > 0 {
+            java::refresh();
+        }
+        spawn(async move {
+            jdks.set(Some(tokio::task::spawn_blocking(java::installed).await.unwrap_or_default()));
+        });
+    });
+
+    // What this machine can install Java with (looked up once, off the UI thread).
+    let mut installers = use_signal(|| Option::<java::Installers>::None);
+    use_effect(move || {
+        if jdks().is_some() && installers.peek().is_none() {
+            spawn(async move {
+                installers.set(Some(tokio::task::spawn_blocking(java::detect_installers).await.unwrap_or_default()));
+            });
+        }
+    });
+    let install_log = use_signal(Vec::<String>::new);
+    let mut install_state = use_signal(|| JobState::Idle);
+
+    let chosen = settings.read().java_home.clone();
+    let list = jdks().unwrap_or_default();
+    let recommended = java::recommend(&list, gradle);
+    let major = java::install_major(gradle);
+    let options = installers().map(|i| java::install_options(java::current_os(), major, &i)).unwrap_or_default();
+    // `selected` probes a JVM; only ask once the scan is cached.
+    let current = jdks().is_some().then(java::selected).flatten();
+    let label = |j: &java::Jdk| {
+        let problem = java::incompatibility(j, gradle).map(|p| format!(" — {p}")).unwrap_or_default();
+        format!("Java {} · {} · {}{problem}", j.version, j.source, j.home.display())
+    };
+
+    rsx! {
+        details { class: "card doctor",
+            summary {
+                span { class: "publish-status publish-idle",
+                    "Java for builds: "
+                    match &current {
+                        Some(j) => rsx! { "{j.version} ({j.source})" },
+                        None if jdks().is_none() => rsx! { "checking…" },
+                        None => rsx! { "none found" },
+                    }
+                }
+            }
+            p { class: "settings-hint",
+                "AppScreens runs keytool and Gradle with this Java — your terminal and system settings are left alone. "
+                if detected { "The project builds with Gradle {gradle.0}.{gradle.1}." } else { "Gradle {gradle.0}.{gradle.1} assumed until the first Android build." }
+            }
+            if jdks().is_none() {
+                p { class: "settings-hint", span { class: "spinner spinner-dark" } " Looking for installed Java versions…" }
+            } else if list.is_empty() {
+                p { class: "settings-hint hint-error",
+                    "No Java installed. Android Studio includes one; otherwise install Java 21 (macOS: brew install --cask temurin@21 · Linux: sudo apt install openjdk-21-jdk · Windows: winget install EclipseAdoptium.Temurin.21.JDK)."
+                }
+            } else {
+                select {
+                    class: "text-input",
+                    onchange: move |e: Event<FormData>| {
+                        settings.write().java_home = e.value();
+                        save_settings(&settings.peek());
+                        java::set_preferred(&e.value());
+                    },
+                    option {
+                        value: "",
+                        selected: chosen.is_empty(),
+                        match &recommended {
+                            Some(r) => format!("Automatic — Java {} ({})", r.version, r.source),
+                            None => "Automatic — no compatible Java installed".to_string(),
+                        }
+                    }
+                    for j in list.iter() {
+                        option { value: "{j.home.display()}", selected: chosen == j.home.to_string_lossy(), "{label(j)}" }
+                    }
+                }
+            }
+            if !options.is_empty() {
+                details { class: "inline-form", open: jdks().is_some() && recommended.is_none(),
+                    summary {
+                        if recommended.is_none() { "Install Java {major}" } else { "Install another Java" }
+                    }
+                    for opt in options.iter().cloned() {
+                        div { class: "install-option",
+                            div { class: "check-text",
+                                span { class: "check-label", "{opt.title}" }
+                                span { class: "check-detail", "{opt.note}" }
+                                if !opt.command.is_empty() {
+                                    code { class: "install-command", "{opt.command}" }
+                                }
+                            }
+                            div { class: "install-actions",
+                                match opt.runner.clone() {
+                                    java::Runner::InApp { program, args } => rsx! {
+                                        button {
+                                            class: "btn btn-sm",
+                                            disabled: matches!(install_state(), JobState::Running(_)),
+                                            onclick: move |_| {
+                                                let (program, args) = (program.clone(), args.clone());
+                                                let mut log = install_log;
+                                                log.set(Vec::new());
+                                                install_state.set(JobState::Running(format!("Installing Java {major}…")));
+                                                spawn(async move {
+                                                    let mut cmd = std::process::Command::new(&program);
+                                                    cmd.args(&args);
+                                                    match jobs::stream_command(cmd, "installer", log).await {
+                                                        Ok(()) => {
+                                                            install_state.set(JobState::Ok(format!("Java {major} installed")));
+                                                            jdks.set(None);
+                                                            rescan.with_mut(|n| *n += 1);
+                                                        }
+                                                        Err(e) => install_state.set(JobState::Failed(e)),
+                                                    }
+                                                });
+                                            },
+                                            "Install"
+                                        }
+                                    },
+                                    java::Runner::Terminal => rsx! {
+                                        button {
+                                            class: "btn btn-sm",
+                                            onclick: {
+                                                let command = opt.command.clone();
+                                                move |_| {
+                                                    install_state.set(match java::open_in_terminal(&command) {
+                                                        Ok(()) => JobState::Ok("Finish in the terminal, then click Scan again".into()),
+                                                        Err(e) => JobState::Failed(e),
+                                                    });
+                                                }
+                                            },
+                                            "Open in Terminal"
+                                        }
+                                        button {
+                                            class: "btn btn-sm",
+                                            onclick: {
+                                                let command = opt.command.clone();
+                                                move |_| {
+                                                    let js = format!("navigator.clipboard.writeText({})", serde_json::to_string(&command).unwrap_or_default());
+                                                    document::eval(&js);
+                                                    install_state.set(JobState::Ok("Command copied".into()));
+                                                }
+                                            },
+                                            "Copy command"
+                                        }
+                                    },
+                                    java::Runner::Browser(url) => rsx! {
+                                        a { class: "btn btn-sm", href: "{url}", target: "_blank", "Download" }
+                                    },
+                                }
+                            }
+                        }
+                    }
+                    if !install_log.read().is_empty() {
+                        div { class: "log-scroll drawer-log install-log",
+                            for line in install_log.read().iter() {
+                                p { class: "log-line", "{line}" }
+                            }
+                        }
+                    }
+                    div { class: "publish-status-row", {job_status_line(install_state(), "")} }
+                }
+            }
+            if let Some(j) = current.clone() {
+                TerminalJava { jdk: j }
+            }
+            div { class: "conn-test",
+                button { class: "btn btn-sm", onclick: move |_| { jdks.set(None); rescan.with_mut(|n| *n += 1); }, "Scan again" }
+            }
+        }
+    }
+}
+
+/// Opt-in: the same Java for the developer's own terminal, previewed,
+/// reversible, and proven by asking a fresh login shell what it gets.
+#[component]
+fn TerminalJava(jdk: java::Jdk) -> Element {
+    let ws = use_context::<Ws>();
+    let target = use_hook(shellenv::detect_target);
+    let mut refresh = use_signal(|| 0u32);
+    let status = use_memo({
+        let target = target.clone();
+        move || {
+            refresh();
+            shellenv::status(&target)
+        }
+    });
+    let mut state = use_signal(|| JobState::Idle);
+    let mut proof = use_signal(Vec::<(String, String)>::new);
+
+    let home = jdk.home.display().to_string();
+    let st = status();
+    let up_to_date = st.installed.as_deref() == Some(home.as_str());
+    let preview = match &target {
+        shellenv::Target::Profile { flavor, .. } => shellenv::block(*flavor, &jdk.home),
+        shellenv::Target::WindowsUser => format!("JAVA_HOME = {home}\nPath += %JAVA_HOME%\\bin"),
+    };
+    let where_ = target.describe();
+
+    rsx! {
+        details { class: "inline-form",
+            summary {
+                "Use this Java in my terminal too"
+                match &st.installed {
+                    Some(h) if *h == home => rsx! { " · on" },
+                    Some(_) => rsx! { " · set to another Java" },
+                    None => rsx! {},
+                }
+            }
+            p { class: "settings-hint",
+                "Optional — AppScreens doesn't need it. For running Gradle or other Java tools yourself. "
+                if up_to_date { "Already in {where_}." } else { "This goes at the end of {where_}:" }
+            }
+            if !up_to_date {
+                code { class: "install-command", "{preview}" }
+            }
+            if !st.others.is_empty() {
+                p { class: "settings-hint",
+                    "{where_} also sets JAVA_HOME on line {st.others.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(\", \")}. AppScreens' lines come after, so they win; you can delete the old ones."
+                }
+            }
+            div { class: "install-actions",
+                if !up_to_date {
+                    button {
+                        class: "btn btn-sm",
+                        onclick: {
+                            let (target, home) = (target.clone(), jdk.home.clone());
+                            move |_| {
+                                state.set(match shellenv::apply(&target, &home) {
+                                    Ok(m) => JobState::Ok(m),
+                                    Err(e) => JobState::Failed(e),
+                                });
+                                proof.set(Vec::new());
+                                refresh.with_mut(|n| *n += 1);
+                            }
+                        },
+                        if st.installed.is_some() { "Switch to this Java" } else { "Add to my terminal" }
+                    }
+                }
+                if st.installed.is_some() {
+                    button {
+                        class: "btn btn-sm",
+                        onclick: {
+                            let target = target.clone();
+                            move |_| {
+                                state.set(match shellenv::remove(&target) {
+                                    Ok(m) => JobState::Ok(m),
+                                    Err(e) => JobState::Failed(e),
+                                });
+                                proof.set(Vec::new());
+                                refresh.with_mut(|n| *n += 1);
+                            }
+                        },
+                        "Remove"
+                    }
+                }
+                button {
+                    class: "btn btn-sm",
+                    disabled: matches!(state(), JobState::Running(_)),
+                    onclick: {
+                        let target = target.clone();
+                        move |_| {
+                            let target = target.clone();
+                            let gradle = java::gradle_project_dir(&ws.dir());
+                            state.set(JobState::Running(if gradle.is_some() {
+                                "Asking a new terminal and Gradle which Java they use…".into()
+                            } else {
+                                "Asking a new terminal which Java it uses…".into()
+                            }));
+                            spawn(async move {
+                                let rows = tokio::task::spawn_blocking(move || shellenv::prove(&target, gradle.as_deref()))
+                                    .await
+                                    .unwrap_or_default();
+                                proof.set(rows);
+                                state.set(JobState::Idle);
+                            });
+                        }
+                    },
+                    "Check my terminal"
+                }
+            }
+            if !proof.read().is_empty() {
+                div { class: "build-checks",
+                    for (label, value) in proof.read().iter() {
+                        div { class: "check-text",
+                            span { class: "check-label", "{label}" }
+                            span { class: "check-detail", "{value}" }
+                        }
+                    }
+                }
+            }
+            div { class: "publish-status-row", {job_status_line(state(), "")} }
+        }
+    }
+}
+
 #[component]
 pub(super) fn BuildStep() -> Element {
     let ws = use_context::<Ws>();
@@ -497,6 +801,7 @@ pub(super) fn BuildStep() -> Element {
 
     rsx! {
         DoctorCard {}
+        JavaCard {}
 
         div { class: "card build-status-card",
             div { class: "publish-status-row",

@@ -1149,7 +1149,7 @@ pub(super) fn generate_manual(ws: Ws) {
 /// Run a command on a plain OS thread (Signals are !Send), streaming its
 /// stdout and stderr into `log` line by line. Lines flow back over mpsc and are
 /// pushed from this task, on the UI thread, so Dioxus re-renders live.
-async fn stream_command(
+pub(super) async fn stream_command(
     mut cmd: std::process::Command,
     name: &str,
     mut log: Signal<Vec<String>>,

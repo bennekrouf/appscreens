@@ -154,10 +154,12 @@ pub(super) fn run(dir: &Path, platform: &PlatformType, apple_identity: &str) -> 
         let ndk = dir_entries(&sdk.join("ndk"));
         let platforms = dir_entries(&sdk.join("platforms"));
         let build_tools = dir_entries(&sdk.join("build-tools"));
-        let java = signing::java_home().and_then(|home| {
-            output(Command::new(home.join("bin/java")).arg("-version"))
-                .and_then(|o| o.lines().next().map(|l| format!("{} · {}", l.trim(), home.display())))
-        });
+        let (gradle, _) = java::project_gradle(dir);
+        let jdk = java::selected();
+        let java_problem = match &jdk {
+            None => Some("No Java found — Gradle and keytool need one (Android Studio ships it; or brew install openjdk@21)".to_string()),
+            Some(j) => java::incompatibility(j, gradle),
+        };
         let rust_missing = missing(&ANDROID_RUST_TARGETS);
 
         items.push(DoctorItem {
@@ -196,8 +198,12 @@ pub(super) fn run(dir: &Path, platform: &PlatformType, apple_identity: &str) -> 
         items.push(DoctorItem {
             section: "Android",
             label: "Java",
-            ok: java.is_some(),
-            detail: java.unwrap_or_else(|| "No Java runtime found — Gradle and keytool need one (Android Studio ships it; or brew install openjdk@21)".into()),
+            ok: java_problem.is_none(),
+            detail: match (&jdk, &java_problem) {
+                (_, Some(p)) => format!("{p} — choose another in the Java card below"),
+                (Some(j), None) => format!("Java {} · {} · works with Gradle {}.{}", j.version, j.source, gradle.0, gradle.1),
+                (None, None) => unreachable!(),
+            },
             fix: None,
         });
         items.push(DoctorItem {

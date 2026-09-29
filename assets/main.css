@@ -2004,6 +2004,28 @@ h2 {
 .build-checks summary { cursor: pointer; font-size: var(--fs-sm); color: var(--text3); margin: var(--s1) 0 var(--s2); }
 .build-checks[open] summary { color: var(--text2); }
 
+/* Build step: installing Java */
+.install-option {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--s3);
+    padding: var(--s2) 0;
+    border-bottom: 1px solid var(--border2);
+}
+.install-option:last-of-type { border-bottom: none; }
+.install-actions { display: flex; gap: var(--s2); flex-shrink: 0; }
+.install-command {
+    display: inline-block;
+    margin-top: var(--s1);
+    font-size: var(--fs-xs);
+    background: var(--bg2);
+    padding: 2px var(--s2);
+    border-radius: var(--r-sm);
+    overflow-wrap: anywhere;
+}
+.install-log { max-height: 180px; margin: var(--s2) 0; padding: var(--s2); background: var(--surface-log); border-radius: var(--r-sm); }
+
 /* Build step: prerequisites */
 .doctor { padding: var(--s3) var(--s4); margin-bottom: var(--s5); }
 .doctor summary { cursor: pointer; list-style: none; }

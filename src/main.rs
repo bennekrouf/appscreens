@@ -93,6 +93,9 @@ struct Settings {
     /// Where it was written
     #[serde(default)]
     last_backup_path: String,
+    /// JDK home AppScreens runs keytool and Gradle with ("" = recommended)
+    #[serde(default)]
+    java_home: String,
 }
 
 fn default_phone_style() -> String {
@@ -117,6 +120,7 @@ impl Default for Settings {
             keys_dir: String::new(),
             last_backup_at: String::new(),
             last_backup_path: String::new(),
+            java_home: String::new(),
         }
     }
 }
