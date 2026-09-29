@@ -534,6 +534,8 @@ pub(super) fn run_build(ws: Ws, script_name: String) {
     let version = proj.read().version.trim().to_string();
     let ios_build_number = proj.read().ios_build_number;
     let android_version_code = proj.read().android_version_code;
+    let keystore_setting = settings.read().android_keystore_path.clone();
+    let alias = key_alias(&proj.read());
     let logo_path = proj.read().logo_path.clone();
 
     // Validate required fields
@@ -642,8 +644,27 @@ pub(super) fn run_build(ws: Ws, script_name: String) {
 
         let mut cmd = std::process::Command::new("bash");
         cmd.arg(&script_path).current_dir(&dir).env("CI", "1");
-        for (k, v) in load_env(&[dir.join(".env"), dir.join("fastlane").join(".env")]) {
+        let env = load_env(&[dir.join(".env"), dir.join("fastlane").join(".env")]);
+        for (k, v) in &env {
             cmd.env(k, v);
+        }
+        // Fill in the upload key from the team settings and the Keychain
+        // when the .env doesn't set it.
+        let (signing, password) = resolve_android_signing(&dir, &keystore_setting, &alias);
+        if let (false, Some(ks)) = (env.contains_key("ANDROID_KEYSTORE_PATH"), signing.keystore) {
+            cmd.env("ANDROID_KEYSTORE_PATH", ks);
+        }
+        if !env.contains_key("ANDROID_KEY_ALIAS") {
+            cmd.env("ANDROID_KEY_ALIAS", &signing.alias);
+        }
+        if let (false, Some(pw)) = (env.contains_key("ANDROID_KEYSTORE_PASSWORD"), password) {
+            cmd.env("ANDROID_KEYSTORE_PASSWORD", pw);
+        }
+        // Gradle needs a JDK; one started from the Dock has no JAVA_HOME.
+        if !env.contains_key("JAVA_HOME") && std::env::var("JAVA_HOME").is_err() {
+            if let Some(home) = signing::java_home() {
+                cmd.env("JAVA_HOME", &home);
+            }
         }
         match stream_command(cmd, &script_name, build_log).await {
             Ok(()) => {
@@ -1502,6 +1523,23 @@ pub(super) fn release_aab(ws: Ws) {
             let (token, package) = play_auth(&dir, &p.android_bundle_id).await?;
             let edit_id = google_play_create_edit(&token, &package).await?;
 
+            // Refuse early rather than after a long upload: the bundle's
+            // versionCode must beat everything already on Play.
+            let gradle = std::fs::read_to_string(
+                dir.join(format!("target/dx/{}/release/android/app/app/build.gradle.kts", p.project_slug)),
+            )
+            .unwrap_or_default();
+            if let Some(code) = verify::gradle_value(&gradle, "versionCode").and_then(|v| v.parse::<u32>().ok()) {
+                if let Some((max, track)) = stores::play_max_version_code(&token, &package, &edit_id).await? {
+                    if code <= max {
+                        let _ = google_play_delete_edit(&token, &package, &edit_id).await;
+                        return Err(format!(
+                            "This AAB's versionCode {code} isn't higher than {max}, already on the {track} track — raise it in the Version step and rebuild."
+                        ));
+                    }
+                }
+            }
+
             let released: Result<u32, String> = async {
                 push(format!("⬆  Uploading {}…", aab.summary()));
                 let code = stores::play_upload_bundle(&token, &package, &edit_id, &aab.path).await?;
@@ -1534,5 +1572,166 @@ pub(super) fn release_aab(ws: Ws) {
             }
             Err(e) => state.set(JobState::Failed(e)),
         }
+    });
+}
+
+// ---- Apple signing repair (Accounts step) ----
+
+/// New key + CSR → Apple Distribution certificate → .p12 in the keys folder
+/// and the login keychain, then select it as the signing identity.
+pub(super) fn create_distribution_certificate(ws: Ws, name: String, email: String, p12_password: String) {
+    let mut state = ws.cert_job;
+    let mut settings = ws.settings;
+    let dir = ws.dir();
+    let keys = keys_dir(&settings.read());
+    state.set(JobState::Running("Creating certificate…".into()));
+    ws.spawn(async move {
+        let result: Result<String, String> = async {
+            let jwt = asc_auth(&dir).await?;
+            let stem = format!("apple_distribution_{}", utc_now()[..10].replace('-', ""));
+            let (key, csr) = {
+                let (keys, stem, email, name) = (keys.clone(), stem.clone(), email.clone(), name.clone());
+                tokio::task::spawn_blocking(move || signing::apple_key_and_csr(&keys, &stem, &email, &name))
+                    .await
+                    .map_err(|e| e.to_string())??
+            };
+            let (_, der) = stores::asc_create_distribution_certificate(&jwt, &csr).await.map_err(|e| {
+                format!("{e}\nCreating certificates needs an API key with enough access (Admin) — or create it in the developer portal.")
+            })?;
+            let label = format!("Apple Distribution: {name}");
+            let der2 = der.clone();
+            tokio::task::spawn_blocking(move || signing::import_apple_identity(&key, &der2, &label, &p12_password))
+                .await
+                .map_err(|e| e.to_string())??;
+            // The keychain's own name for it, e.g. "Apple Distribution: Jane (TEAMID)".
+            let sha1 = signing::cert_sha1(&der).unwrap_or_default();
+            let identity = tokio::task::spawn_blocking(move || {
+                std::process::Command::new("security")
+                    .args(["find-identity", "-v", "-p", "codesigning"])
+                    .output()
+                    .ok()
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .and_then(|out| {
+                        out.lines()
+                            .find(|l| l.contains(&sha1))
+                            .and_then(|l| l.split('"').nth(1).map(str::to_string))
+                    })
+            })
+            .await
+            .ok()
+            .flatten()
+            .ok_or("Certificate created, but it doesn't show up as a signing identity — check Keychain Access.")?;
+            Ok(identity)
+        }
+        .await;
+        match result {
+            Ok(identity) => {
+                settings.write().apple_identity = identity.clone();
+                save_settings(&settings.read());
+                state.set(JobState::Ok(format!("{identity} — installed, with a .p12 backup in the keys folder")));
+            }
+            Err(e) => state.set(JobState::Failed(e)),
+        }
+    });
+}
+
+/// Replace this app's App Store profile with a fresh one on a distribution
+/// certificate whose private key is on this Mac, install it, and select it.
+pub(super) fn repair_profile(ws: Ws) {
+    let mut state = ws.profile_job;
+    let mut refresh = ws.refresh;
+    let dir = ws.dir();
+    let bundle = ws.proj.read().ios_bundle_id.trim().to_string();
+    let app_name = ws.proj.read().app_name.trim().to_string();
+    if bundle.is_empty() {
+        state.set(JobState::Failed("Set the iOS bundle ID in the App step first.".into()));
+        return;
+    }
+    state.set(JobState::Running("Regenerating profile…".into()));
+    ws.spawn(async move {
+        let result: Result<String, String> = async {
+            let jwt = asc_auth(&dir).await?;
+            let local = tokio::task::spawn_blocking(signing::keychain_identity_hashes).await.unwrap_or_default();
+            let mut certs: Vec<_> = stores::asc_distribution_certificates(&jwt)
+                .await?
+                .into_iter()
+                .filter(|c| signing::cert_sha1(&c.der).is_some_and(|h| local.contains(&h)))
+                .collect();
+            certs.sort_by(|a, b| b.expires.cmp(&a.expires));
+            let cert = certs.first().ok_or(
+                "No distribution certificate with its private key on this Mac — create one above first.",
+            )?;
+            let bundle_res = stores::asc_bundle_id(&jwt, &bundle).await?;
+            let name = format!("{} App Store", if app_name.is_empty() { &bundle } else { &app_name });
+            for old in stores::asc_bundle_profiles(&jwt, &bundle_res).await? {
+                if old.profile_type == "IOS_APP_STORE" && (old.state == "INVALID" || old.name == name) {
+                    stores::asc_delete_profile(&jwt, &old.id).await?;
+                }
+            }
+            let content = stores::asc_create_app_store_profile(&jwt, &name, &bundle_res, &cert.id).await?;
+            let text = String::from_utf8_lossy(&content).to_string();
+            let uuid = checks::plist_value(&text, "UUID").ok_or("The new profile has no UUID")?;
+            let folder = dirs::home_dir().unwrap_or_default().join("Library/MobileDevice/Provisioning Profiles");
+            std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
+            let path = folder.join(format!("{uuid}.mobileprovision"));
+            std::fs::write(&path, &content).map_err(|e| e.to_string())?;
+            Ok(path.to_string_lossy().to_string())
+        }
+        .await;
+        match result {
+            Ok(path) => {
+                ws.update(|p| p.provisioning_profile = path.clone());
+                refresh.with_mut(|n| *n += 1);
+                state.set(JobState::Ok("New App Store profile installed and selected".into()));
+            }
+            Err(e) => state.set(JobState::Failed(e)),
+        }
+    });
+}
+
+// ---- What the stores currently show (Submit step) ----
+
+/// Lines for the Store status card: ("App Store" | "Google Play", text).
+pub(super) fn fetch_store_status(ws: Ws, mut out: Signal<Vec<(String, String)>>, mut state: Signal<JobState>) {
+    let dir = ws.dir();
+    let p = ws.proj.read().clone();
+    state.set(JobState::Running("Asking the stores…".into()));
+    ws.spawn(async move {
+        let mut lines = Vec::new();
+        let mut errors = Vec::new();
+        if p.platform_type.has_ios() {
+            let r: Result<Vec<(String, String)>, String> = async {
+                let jwt = asc_auth(&dir).await?;
+                let app = asc_find_app(&jwt, p.ios_bundle_id.trim()).await?;
+                stores::asc_app_versions(&jwt, &app).await
+            }
+            .await;
+            match r {
+                Ok(v) if v.is_empty() => lines.push(("App Store".into(), "No versions yet".into())),
+                Ok(v) => lines.extend(v.into_iter().map(|(ver, st)| ("App Store".to_string(), format!("{ver} — {st}")))),
+                Err(e) => errors.push(format!("App Store: {e}")),
+            }
+        }
+        if p.platform_type.has_android() {
+            let r: Result<Vec<(String, String)>, String> = async {
+                let (token, package) = play_auth(&dir, p.android_bundle_id.trim()).await?;
+                let edit = google_play_create_edit(&token, &package).await?;
+                let summary = stores::play_track_summary(&token, &package, &edit).await;
+                let _ = google_play_delete_edit(&token, &package, &edit).await;
+                summary
+            }
+            .await;
+            match r {
+                Ok(v) if v.is_empty() => lines.push(("Google Play".into(), "No releases on any track yet".into())),
+                Ok(v) => lines.extend(v.into_iter().map(|(t, s)| ("Google Play".to_string(), format!("{t}: {s}")))),
+                Err(e) => errors.push(format!("Google Play: {e}")),
+            }
+        }
+        out.set(lines);
+        state.set(if errors.is_empty() {
+            JobState::Ok(format!("Updated {}", &utc_now()[11..]))
+        } else {
+            JobState::Failed(errors.join("\n"))
+        });
     });
 }

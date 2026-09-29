@@ -277,6 +277,70 @@ pub(super) async fn play_upload_bundle(token: &str, package: &str, edit_id: &str
         .ok_or_else(|| format!("No versionCode in {resp}"))
 }
 
+/// Recent App Store versions of an app: (version, state), newest first.
+pub(super) async fn asc_app_versions(jwt: &str, app_id: &str) -> Result<Vec<(String, String)>, String> {
+    let resp = send_json(reqwest::Client::new()
+        .get(format!("{ASC}/apps/{app_id}/appStoreVersions"))
+        .query(&[("fields[appStoreVersions]", "versionString,appStoreState"), ("limit", "5")])
+        .bearer_auth(jwt))
+    .await?;
+    Ok(resp["data"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .map(|v| {
+            (
+                v["attributes"]["versionString"].as_str().unwrap_or("?").to_string(),
+                v["attributes"]["appStoreState"].as_str().unwrap_or("?").replace('_', " ").to_lowercase(),
+            )
+        })
+        .collect())
+}
+
+/// Every track's releases: (track, "name · status · codes").
+pub(super) async fn play_track_summary(token: &str, package: &str, edit_id: &str) -> Result<Vec<(String, String)>, String> {
+    let resp = send_json(reqwest::Client::new().get(format!("{PLAY}/{package}/edits/{edit_id}/tracks")).bearer_auth(token)).await?;
+    let mut out = Vec::new();
+    for t in resp["tracks"].as_array().cloned().unwrap_or_default() {
+        let track = t["track"].as_str().unwrap_or("?").to_string();
+        for r in t["releases"].as_array().cloned().unwrap_or_default() {
+            let codes: Vec<String> = r["versionCodes"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .iter()
+                .map(|c| c.as_str().map(str::to_string).unwrap_or_else(|| c.to_string()))
+                .collect();
+            out.push((
+                track.clone(),
+                format!("{} · {} · versionCode {}", r["name"].as_str().unwrap_or("—"), r["status"].as_str().unwrap_or("?"), codes.join(", ")),
+            ));
+        }
+    }
+    Ok(out)
+}
+
+/// Highest versionCode on any track of the app, with that track's name.
+pub(super) async fn play_max_version_code(token: &str, package: &str, edit_id: &str) -> Result<Option<(u32, String)>, String> {
+    let resp = send_json(reqwest::Client::new().get(format!("{PLAY}/{package}/edits/{edit_id}/tracks")).bearer_auth(token)).await?;
+    let mut best: Option<(u32, String)> = None;
+    for t in resp["tracks"].as_array().cloned().unwrap_or_default() {
+        let name = t["track"].as_str().unwrap_or("").to_string();
+        for r in t["releases"].as_array().cloned().unwrap_or_default() {
+            for c in r["versionCodes"].as_array().cloned().unwrap_or_default() {
+                let code = c.as_str().and_then(|s| s.parse().ok()).or_else(|| c.as_u64().map(|n| n as u32));
+                if let Some(code) = code {
+                    if best.as_ref().is_none_or(|(b, _)| code > *b) {
+                        best = Some((code, name.clone()));
+                    }
+                }
+            }
+        }
+    }
+    Ok(best)
+}
+
 /// One versionCode, released on one track.
 pub(super) struct TrackRelease<'a> {
     pub track: &'a str,
@@ -313,9 +377,149 @@ pub(super) async fn play_update_track(token: &str, package: &str, edit_id: &str,
     .map(|_| ())
 }
 
+// ---------------------------------------------------------------------------
+// Apple signing repair: certificates and provisioning profiles
+// ---------------------------------------------------------------------------
+
+/// Standard base64 → bytes (App Store Connect returns certificate and
+/// profile content this way).
+fn b64decode(input: &str) -> Result<Vec<u8>, String> {
+    let mut out = Vec::with_capacity(input.len() * 3 / 4);
+    let (mut buf, mut bits) = (0u32, 0u32);
+    for c in input.bytes().filter(|c| !c.is_ascii_whitespace() && *c != b'=') {
+        let v = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return Err("Invalid base64 in App Store Connect response".into()),
+        };
+        buf = (buf << 6) | v as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buf >> bits) as u8);
+        }
+    }
+    Ok(out)
+}
+
+/// Create an Apple Distribution certificate from a CSR. Returns (id, DER).
+/// Apple only lets some API key roles do this; its refusal is passed on.
+pub(super) async fn asc_create_distribution_certificate(jwt: &str, csr_pem: &str) -> Result<(String, Vec<u8>), String> {
+    let body = serde_json::json!({
+        "data": { "type": "certificates", "attributes": { "certificateType": "DISTRIBUTION", "csrContent": csr_pem } }
+    });
+    let resp = send_json(reqwest::Client::new().post(format!("{ASC}/certificates")).bearer_auth(jwt).json(&body)).await?;
+    let id = resp["data"]["id"].as_str().ok_or_else(|| format!("No certificate id in {resp}"))?.to_string();
+    let der = b64decode(resp["data"]["attributes"]["certificateContent"].as_str().unwrap_or(""))?;
+    Ok((id, der))
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct AscCertificate {
+    pub id: String,
+    pub der: Vec<u8>,
+    pub expires: String,
+}
+
+/// Every distribution certificate on the team.
+pub(super) async fn asc_distribution_certificates(jwt: &str) -> Result<Vec<AscCertificate>, String> {
+    let resp = send_json(reqwest::Client::new()
+        .get(format!("{ASC}/certificates"))
+        .query(&[
+            ("filter[certificateType]", "DISTRIBUTION,IOS_DISTRIBUTION"),
+            ("fields[certificates]", "certificateContent,expirationDate,certificateType"),
+            ("limit", "200"),
+        ])
+        .bearer_auth(jwt))
+    .await?;
+    let mut certs = Vec::new();
+    for c in resp["data"].as_array().cloned().unwrap_or_default() {
+        certs.push(AscCertificate {
+            id: c["id"].as_str().unwrap_or_default().to_string(),
+            der: b64decode(c["attributes"]["certificateContent"].as_str().unwrap_or(""))?,
+            expires: c["attributes"]["expirationDate"].as_str().unwrap_or("").to_string(),
+        });
+    }
+    Ok(certs)
+}
+
+/// The team's bundle ID resource for an identifier like "com.acme.app".
+pub(super) async fn asc_bundle_id(jwt: &str, identifier: &str) -> Result<String, String> {
+    let resp = send_json(reqwest::Client::new()
+        .get(format!("{ASC}/bundleIds"))
+        .query(&[("filter[identifier]", identifier), ("limit", "200")])
+        .bearer_auth(jwt))
+    .await?;
+    // The filter also matches longer identifiers; keep the exact one.
+    resp["data"]
+        .as_array()
+        .and_then(|a| a.iter().find(|b| b["attributes"]["identifier"].as_str() == Some(identifier)))
+        .and_then(|b| b["id"].as_str())
+        .map(str::to_string)
+        .ok_or_else(|| format!("No App ID \"{identifier}\" in the developer account — register it under Identifiers first."))
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct AscProfile {
+    pub id: String,
+    pub name: String,
+    pub profile_type: String,
+    pub state: String,
+}
+
+pub(super) async fn asc_bundle_profiles(jwt: &str, bundle_id: &str) -> Result<Vec<AscProfile>, String> {
+    let resp = send_json(reqwest::Client::new()
+        .get(format!("{ASC}/bundleIds/{bundle_id}/profiles"))
+        .query(&[("fields[profiles]", "name,profileType,profileState"), ("limit", "200")])
+        .bearer_auth(jwt))
+    .await?;
+    Ok(resp["data"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .map(|p| AscProfile {
+            id: p["id"].as_str().unwrap_or_default().to_string(),
+            name: p["attributes"]["name"].as_str().unwrap_or_default().to_string(),
+            profile_type: p["attributes"]["profileType"].as_str().unwrap_or_default().to_string(),
+            state: p["attributes"]["profileState"].as_str().unwrap_or_default().to_string(),
+        })
+        .collect())
+}
+
+pub(super) async fn asc_delete_profile(jwt: &str, id: &str) -> Result<(), String> {
+    send_json(reqwest::Client::new().delete(format!("{ASC}/profiles/{id}")).bearer_auth(jwt)).await.map(|_| ())
+}
+
+/// Create an App Store provisioning profile. Returns the .mobileprovision bytes.
+pub(super) async fn asc_create_app_store_profile(jwt: &str, name: &str, bundle_id: &str, certificate_id: &str) -> Result<Vec<u8>, String> {
+    let body = serde_json::json!({
+        "data": {
+            "type": "profiles",
+            "attributes": { "name": name, "profileType": "IOS_APP_STORE" },
+            "relationships": {
+                "bundleId": { "data": { "type": "bundleIds", "id": bundle_id } },
+                "certificates": { "data": [{ "type": "certificates", "id": certificate_id }] }
+            }
+        }
+    });
+    let resp = send_json(reqwest::Client::new().post(format!("{ASC}/profiles")).bearer_auth(jwt).json(&body)).await?;
+    b64decode(resp["data"]["attributes"]["profileContent"].as_str().unwrap_or(""))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decodes_base64() {
+        assert_eq!(b64decode("aGVsbG8gd29ybGQ=").unwrap(), b"hello world");
+        assert_eq!(b64decode("AAEC\n/w==").unwrap(), vec![0, 1, 2, 255]);
+        assert!(b64decode("not*base64").is_err());
+    }
 
     #[test]
     fn play_codes_for_store_locales() {

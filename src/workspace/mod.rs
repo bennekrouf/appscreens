@@ -9,10 +9,16 @@
 use super::*;
 use std::time::SystemTime;
 
+mod accounts;
 mod checks;
+mod consistency;
+mod doctor;
 mod jobs;
+mod repo;
+mod signing;
 mod steps;
 mod stores;
+mod verify;
 
 use checks::*;
 
@@ -176,8 +182,6 @@ struct CredCheck {
 struct Creds {
     app_store: Vec<CredCheck>,
     play: Vec<CredCheck>,
-    /// Upload keystore for signing release AABs (build side, not the store's)
-    android_signing: Vec<CredCheck>,
 }
 
 impl Creds {
@@ -187,21 +191,22 @@ impl Creds {
     fn play_ok(&self) -> bool {
         self.play.iter().all(|c| c.ok)
     }
-    fn android_signing_ok(&self) -> bool {
-        self.android_signing.iter().all(|c| c.ok)
-    }
 }
 
-/// Same lookup order as the publish jobs: project `.env`, then
-/// `fastlane/.env`, then the process environment.
-fn read_creds(dir: &std::path::Path) -> Creds {
+/// Lookup order shared by every job: project `.env`, then `fastlane/.env`,
+/// then the process environment.
+fn env_lookup(dir: &std::path::Path) -> impl Fn(&str) -> Option<String> {
     let env = load_env(&[dir.join(".env"), dir.join("fastlane").join(".env")]);
-    let resolve = |key: &str| -> Option<String> {
+    move |key: &str| {
         env.get(key)
             .cloned()
             .or_else(|| std::env::var(key).ok())
             .filter(|v| !v.is_empty())
-    };
+    }
+}
+
+fn read_creds(dir: &std::path::Path) -> Creds {
+    let resolve = env_lookup(dir);
     let value = |label: &'static str, key: &str| match resolve(key) {
         Some(_) => CredCheck { label, ok: true, detail: format!("{key} is set") },
         None => CredCheck { label, ok: false, detail: format!("{key} is not set") },
@@ -225,11 +230,134 @@ fn read_creds(dir: &std::path::Path) -> Creds {
             file("Private key (.p8)", "APP_STORE_CONNECT_API_KEY_KEY_FILEPATH"),
         ],
         play: vec![file("Service-account JSON", "GOOGLE_PLAY_JSON_KEY")],
-        android_signing: vec![
-            file("Upload keystore", "ANDROID_KEYSTORE_PATH"),
-            value("Keystore password", "ANDROID_KEYSTORE_PASSWORD"),
-        ],
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum PasswordSource {
+    Env,
+    Keychain,
+}
+
+/// Where the Android upload key comes from. The project's `.env` wins (so
+/// existing setups keep working), then the team settings; the password
+/// comes from the Keychain. Holds no secret itself.
+#[derive(Clone, PartialEq, Debug, Default)]
+struct AndroidSigning {
+    keystore: Option<PathBuf>,
+    keystore_from_env: bool,
+    alias: String,
+    password: Option<PasswordSource>,
+}
+
+impl AndroidSigning {
+    fn checks(&self) -> Vec<CredCheck> {
+        let keystore = match &self.keystore {
+            Some(p) if p.is_file() => CredCheck {
+                label: "Upload keystore",
+                ok: true,
+                detail: format!("{}{}", p.display(), if self.keystore_from_env { " (from .env)" } else { "" }),
+            },
+            Some(p) => CredCheck { label: "Upload keystore", ok: false, detail: format!("File not found: {}", p.display()) },
+            None => CredCheck { label: "Upload keystore", ok: false, detail: "Not set — choose or create one below".into() },
+        };
+        let password = CredCheck {
+            label: "Keystore password",
+            ok: self.password.is_some(),
+            detail: match self.password {
+                Some(PasswordSource::Keychain) => "In the Keychain".into(),
+                Some(PasswordSource::Env) => "In the project's .env — the Keychain is safer".into(),
+                None => "Not saved yet".into(),
+            },
+        };
+        vec![keystore, password]
+    }
+
+    fn ok(&self) -> bool {
+        self.checks().iter().all(|c| c.ok)
+    }
+}
+
+/// Resolve the upload key for a project, returning the password separately
+/// so it never sits in UI state.
+fn resolve_android_signing(dir: &std::path::Path, keystore_setting: &str, alias: &str) -> (AndroidSigning, Option<String>) {
+    let resolve = env_lookup(dir);
+    let from_env = resolve("ANDROID_KEYSTORE_PATH");
+    let keystore = from_env
+        .clone()
+        .or_else(|| (!keystore_setting.trim().is_empty()).then(|| keystore_setting.trim().to_string()))
+        .map(|p| signing::expand_home(&p));
+    let alias = resolve("ANDROID_KEY_ALIAS").unwrap_or_else(|| alias.to_string());
+    let (password, source) = match resolve("ANDROID_KEYSTORE_PASSWORD") {
+        Some(p) => (Some(p), Some(PasswordSource::Env)),
+        None => match keystore.as_ref().and_then(|k| signing::keychain_get(&signing::keystore_account(k))) {
+            Some(p) => (Some(p), Some(PasswordSource::Keychain)),
+            None => (None, None),
+        },
+    };
+    (AndroidSigning { keystore, keystore_from_env: from_env.is_some(), alias, password: source }, password)
+}
+
+/// The key alias for a project: its own setting, else the lowercase slug.
+fn key_alias(p: &ProjectState) -> String {
+    let own = p.android_key_alias.trim();
+    if own.is_empty() { p.project_slug.trim().to_lowercase() } else { own.to_string() }
+}
+
+/// The keys folder: the team setting, else ~/keys.
+fn keys_dir(s: &Settings) -> PathBuf {
+    if s.keys_dir.trim().is_empty() { signing::default_keys_dir() } else { signing::expand_home(s.keys_dir.trim()) }
+}
+
+/// Everything the encrypted backup covers.
+fn backup_sources(s: &Settings) -> Vec<PathBuf> {
+    let dir = keys_dir(s);
+    let mut sources = vec![dir.clone()];
+    if !s.android_keystore_path.trim().is_empty() {
+        let ks = signing::expand_home(s.android_keystore_path.trim());
+        if !ks.starts_with(&dir) {
+            sources.push(ks);
+        }
+    }
+    sources
+}
+
+#[derive(Clone, PartialEq, Debug)]
+enum BackupState {
+    Never,
+    /// Keys changed after the last backup
+    Outdated(String),
+    Current(String),
+}
+
+fn backup_state(s: &Settings) -> BackupState {
+    if s.last_backup_at.is_empty() {
+        return BackupState::Never;
+    }
+    let newest = signing::newest_mtime(&backup_sources(s));
+    // last_backup_at is "YYYY-MM-DD HH:MM" UTC; compare as seconds.
+    let backed_up = parse_utc(&s.last_backup_at);
+    match (newest, backed_up) {
+        (Some(n), Some(b)) if n > b + std::time::Duration::from_secs(60) => BackupState::Outdated(s.last_backup_at.clone()),
+        _ => BackupState::Current(s.last_backup_at.clone()),
+    }
+}
+
+/// "YYYY-MM-DD HH:MM" (UTC) → SystemTime.
+fn parse_utc(t: &str) -> Option<SystemTime> {
+    let (date, time) = t.split_once(' ')?;
+    let mut d = date.split('-').map(|x| x.parse::<i64>());
+    let (y, m, day) = (d.next()?.ok()?, d.next()?.ok()?, d.next()?.ok()?);
+    let (hh, mm) = time.split_once(':')?;
+    let (hh, mm): (u64, u64) = (hh.parse().ok()?, mm.parse().ok()?);
+    // days-from-civil (inverse of checks::utc_now)
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    Some(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(days as u64 * 86_400 + hh * 3600 + mm * 60))
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -307,11 +435,26 @@ pub(crate) struct Ws {
     refresh: Signal<u32>,
     creds: Memo<Creds>,
     artifacts: Memo<Artifacts>,
+    /// Upload key source for this project (no secret inside)
+    android: Memo<AndroidSigning>,
+    /// Secret files git tracks in this project
+    tracked_secrets: Memo<Vec<String>>,
+    /// Is the source code pushed somewhere other than this Mac?
+    repo: Memo<repo::RepoState>,
+    /// References to a different Android package in the code or .env
+    package_mismatches: Memo<Vec<consistency::PackageRef>>,
+    backup: Memo<BackupState>,
     /// The project's provisioning profile, parsed (None if unset/unreadable).
     profile: Memo<Option<ProfileInfo>>,
     /// Results of the Accounts step's "Test connection" buttons.
     asc_test: Signal<JobState>,
     play_test: Signal<JobState>,
+    /// Accounts step: certificate creation and profile repair
+    cert_job: Signal<JobState>,
+    profile_job: Signal<JobState>,
+    /// What the newest AAB / IPA actually contain (re-checked per build)
+    aab_check: Signal<Vec<CredCheck>>,
+    ipa_check: Signal<Vec<CredCheck>>,
     /// Language currently being edited in the Languages step.
     active_locale: Signal<String>,
 
@@ -415,6 +558,12 @@ impl Ws {
                 let ids_ok = (!plat.has_ios() || !p.ios_bundle_id.trim().is_empty())
                     && (!plat.has_android() || !p.android_bundle_id.trim().is_empty());
                 if !p.app_name.trim().is_empty() && !p.project_slug.trim().is_empty() && ids_ok {
+                    if plat.has_android() && !self.package_mismatches.read().is_empty() {
+                        return StepStatus::Attention;
+                    }
+                    if !self.repo.read().safe() {
+                        return StepStatus::Attention;
+                    }
                     StepStatus::Done
                 } else {
                     StepStatus::Todo
@@ -434,8 +583,12 @@ impl Ws {
                 }
                 if plat.has_android() {
                     checks.push(creds.play_ok() && untested_or_ok(&self.play_test.read()));
-                    checks.push(creds.android_signing_ok());
+                    checks.push(self.android.read().ok());
                 }
+                // Hygiene applies whatever the platform: no secrets in git,
+                // and a backup that covers the current keys.
+                checks.push(self.tracked_secrets.read().is_empty());
+                checks.push(matches!(*self.backup.read(), BackupState::Current(_)));
                 match checks.iter().filter(|ok| **ok).count() {
                     n if n == checks.len() => StepStatus::Done,
                     0 => StepStatus::Todo,
@@ -552,6 +705,32 @@ pub(crate) fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> E
         refresh.read();
         scan_artifacts(&dir.read())
     });
+    // Two stages so typing in unrelated project fields doesn't re-run the
+    // Keychain lookup: the inputs memo only changes when its values do.
+    let signing_inputs = use_memo(move || (settings.read().android_keystore_path.clone(), key_alias(&proj.read())));
+    let android = use_memo(move || {
+        refresh.read();
+        let (keystore, alias) = signing_inputs();
+        resolve_android_signing(&dir.read(), &keystore, &alias).0
+    });
+    let android_package = use_memo(move || proj.read().android_bundle_id.trim().to_string());
+    let package_mismatches = use_memo(move || {
+        refresh.read();
+        let expected = android_package();
+        if expected.is_empty() { Vec::new() } else { consistency::package_mismatches(&dir.read(), &expected) }
+    });
+    let repo = use_memo(move || {
+        refresh.read();
+        repo::repo_state(&dir.read())
+    });
+    let tracked_secrets = use_memo(move || {
+        refresh.read();
+        signing::tracked_secrets(&dir.read())
+    });
+    let backup = use_memo(move || {
+        refresh.read();
+        backup_state(&settings.read())
+    });
     let profile = use_memo(move || {
         refresh.read();
         let path = proj.read().provisioning_profile.trim().to_string();
@@ -582,9 +761,18 @@ pub(crate) fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> E
         refresh,
         creds,
         artifacts,
+        android,
+        tracked_secrets,
+        repo,
+        package_mismatches,
+        backup,
         profile,
         asc_test: use_signal(|| JobState::Idle),
         play_test: use_signal(|| JobState::Idle),
+        cert_job: use_signal(|| JobState::Idle),
+        profile_job: use_signal(|| JobState::Idle),
+        aab_check: use_signal(Vec::new),
+        ipa_check: use_signal(Vec::new),
         active_locale,
         gen_phase: use_signal(|| AppPhase::Idle),
         gen_log: use_signal(Vec::new),
@@ -604,6 +792,40 @@ pub(crate) fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> E
         drawer_job: use_signal(|| JobKind::Screenshots),
     };
     use_context_provider(|| ws);
+
+    // Inspect each newly built bundle once (off the UI thread).
+    use_effect(move || {
+        let a = artifacts();
+        let dir = ws.dir();
+        let p = ws.proj.peek().clone();
+        let keystore = ws.settings.peek().android_keystore_path.clone();
+        let (mut aab_check, mut ipa_check) = (ws.aab_check, ws.ipa_check);
+        spawn(async move {
+            if let Some(aab) = a.aab.clone() {
+                let (dir, p, keystore) = (dir.clone(), p.clone(), keystore.clone());
+                let checks = tokio::task::spawn_blocking(move || {
+                    let (signing, password) = resolve_android_signing(&dir, &keystore, &key_alias(&p));
+                    let expected = signing
+                        .keystore
+                        .zip(password)
+                        .and_then(|(ks, pw)| signing::upload_key_fingerprint(&ks, &signing.alias, &pw).ok());
+                    verify::verify_aab(&aab.path, &dir, &p.project_slug, &p.android_bundle_id, expected.as_deref())
+                })
+                .await
+                .unwrap_or_default();
+                aab_check.set(checks);
+            } else {
+                aab_check.set(Vec::new());
+            }
+            if let Some(ipa) = a.ipa.clone() {
+                let bundle = p.ios_bundle_id.clone();
+                let checks = tokio::task::spawn_blocking(move || verify::verify_ipa(&ipa.path, &bundle)).await.unwrap_or_default();
+                ipa_check.set(checks);
+            } else {
+                ipa_check.set(Vec::new());
+            }
+        });
+    });
 
     // Open on the first step that still needs work, once.
     use_hook(move || {
@@ -693,7 +915,7 @@ pub(crate) fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> E
 
                     match current {
                         Step::App => rsx! { steps::AppStep {} },
-                        Step::Accounts => rsx! { steps::AccountsStep {} },
+                        Step::Accounts => rsx! { accounts::AccountsStep {} },
                         Step::Version => rsx! { steps::VersionStep {} },
                         Step::Build => rsx! { steps::BuildStep {} },
                         Step::Languages => rsx! { steps::LanguagesStep {} },

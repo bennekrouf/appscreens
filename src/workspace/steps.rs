@@ -32,7 +32,7 @@ fn project_field(
 }
 
 /// One line of a readiness checklist. `fix` names the step that resolves it.
-fn check_row(ws: Ws, ok: bool, label: &str, detail: String, fix: Option<Step>) -> Element {
+pub(super) fn check_row(ws: Ws, ok: bool, label: &str, detail: String, fix: Option<Step>) -> Element {
     rsx! {
         li { class: if ok { "check-row check-ok" } else { "check-row check-bad" },
             span { class: "check-mark",
@@ -56,7 +56,7 @@ fn check_row(ws: Ws, ok: bool, label: &str, detail: String, fix: Option<Step>) -
     }
 }
 
-fn job_status_line(state: JobState, idle_text: &str) -> Element {
+pub(super) fn job_status_line(state: JobState, idle_text: &str) -> Element {
     match state {
         JobState::Idle => rsx! { span { class: "publish-status publish-idle", "{idle_text}" } },
         JobState::Running(t) => rsx! {
@@ -83,6 +83,85 @@ fn locale_name(code: &str) -> String {
 // ---------------------------------------------------------------------------
 // 1 · App
 // ---------------------------------------------------------------------------
+
+/// Is the code backed up anywhere but this Mac?
+#[component]
+fn SourceCard() -> Element {
+    let ws = use_context::<Ws>();
+    let mut refresh = ws.refresh;
+    let r = ws.repo.read().clone();
+    rsx! {
+        div { class: "card",
+            h2 { "Source code" }
+            ul { class: "check-list",
+                {check_row(ws, r.safe(), if r.safe() { "Pushed" } else { "Not safe from a lost Mac" }, r.summary(), None)}
+            }
+            if !r.safe() {
+                p { class: "settings-hint",
+                    if !r.is_git {
+                        "Put the project in git and push it to a private repository (GitHub, GitLab…)."
+                    } else if r.remote.is_none() {
+                        "Add a private remote and push: git remote add origin <url> && git push -u origin HEAD"
+                    } else {
+                        "Push your commits: git push"
+                    }
+                }
+            }
+            button { class: "btn btn-sm", onclick: move |_| refresh.with_mut(|n| *n += 1), "Check again" }
+        }
+    }
+}
+
+/// Does the app's own code agree on its Android package?
+#[component]
+fn IdentifiersCard() -> Element {
+    let ws = use_context::<Ws>();
+    let mut refresh = ws.refresh;
+    let bad = ws.package_mismatches.read().clone();
+    let expected = ws.proj.read().android_bundle_id.trim().to_string();
+    let mut state = use_signal(|| JobState::Idle);
+    let dir = ws.dir();
+
+    if expected.is_empty() {
+        return rsx! {};
+    }
+    rsx! {
+        div { class: "card",
+            h2 { "Android package across the project" }
+            if bad.is_empty() {
+                ul { class: "check-list",
+                    {check_row(ws, true, "Code and .env agree", format!("Store links, data paths and overrides all use {expected}"), None)}
+                }
+            } else {
+                p { class: "hint card-hint",
+                    "These name a different package. Built like this, the app would save its data in the wrong place, link to the wrong store page — or, for the .env override, upload to a different app."
+                }
+                ul { class: "check-list",
+                    for r in bad.iter() {
+                        {check_row(ws, false, "Different package",
+                            format!("{}:{} — {}", r.file.strip_prefix(&dir).unwrap_or(&r.file).display(), r.line, r.value), None)}
+                    }
+                }
+                div { class: "conn-test",
+                    button {
+                        class: "btn btn-sm",
+                        onclick: move |_| {
+                            let refs = ws.package_mismatches.peek().clone();
+                            let expected = expected.clone();
+                            state.set(match consistency::fix_package_mismatches(&expected, &refs) {
+                                Ok(n) => JobState::Ok(format!("Updated {n} file(s) to {expected}")),
+                                Err(e) => JobState::Failed(e),
+                            });
+                            refresh.with_mut(|n| *n += 1);
+                        },
+                        "Use {expected} everywhere"
+                    }
+                    div { class: "publish-status-row", {job_status_line(state(), "")} }
+                }
+            }
+        }
+    }
+}
 #[component]
 pub(super) fn AppStep() -> Element {
     let ws = use_context::<Ws>();
@@ -106,6 +185,11 @@ pub(super) fn AppStep() -> Element {
                 }
             }
         }
+
+        if plat.has_android() {
+            IdentifiersCard {}
+        }
+        SourceCard {}
 
         div { class: "card",
             h2 { "Platforms" }
@@ -162,248 +246,6 @@ pub(super) fn AppStep() -> Element {
                     }
                 }
             }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// 2 · Accounts & signing
-// ---------------------------------------------------------------------------
-
-/// Signing identities from the login keychain, Distribution/Development only.
-fn discover_identities() -> Vec<String> {
-    std::process::Command::new("security")
-        .args(["find-identity", "-v", "-p", "codesigning"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|out| {
-            out.lines()
-                .filter_map(|line| {
-                    // Lines look like:  1) HASH "Identity Name (TEAMID)"
-                    let q = line.find('"')?;
-                    let rest = &line[q + 1..];
-                    let end = rest.rfind('"')?;
-                    Some(rest[..end].to_string())
-                })
-                .filter(|id| id.starts_with("Apple Distribution") || id.starts_with("Apple Development"))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default()
-}
-
-// rfd has no Android backend, and iOS signing is meaningless there anyway.
-#[cfg(not(target_os = "android"))]
-fn profile_browse_button(ws: Ws) -> Element {
-    rsx! {
-        button {
-            class: "btn settings-browse-btn",
-            onclick: move |_| {
-                ws.spawn(async move {
-                    if let Some(f) = rfd::AsyncFileDialog::new()
-                        .set_title("Select Provisioning Profile")
-                        .add_filter("Provisioning Profile", &["mobileprovision"])
-                        .pick_file()
-                        .await
-                    {
-                        let path = f.path().to_string_lossy().to_string();
-                        ws.update(|p| p.provisioning_profile = path);
-                    }
-                });
-            },
-            "Browse…"
-        }
-    }
-}
-#[cfg(target_os = "android")]
-fn profile_browse_button(_ws: Ws) -> Element {
-    rsx! {}
-}
-
-/// Connection-test button plus its latest result.
-fn connection_test(state: JobState, on_test: impl FnMut(MouseEvent) + 'static) -> Element {
-    let running = matches!(state, JobState::Running(_));
-    rsx! {
-        div { class: "conn-test",
-            button {
-                class: "btn btn-sm",
-                disabled: running,
-                onclick: on_test,
-                if running {
-                    span { class: "spinner spinner-dark" }
-                    " Testing…"
-                } else {
-                    "Test connection"
-                }
-            }
-            div { class: "publish-status-row", {job_status_line(state, "Not tested yet")} }
-        }
-    }
-}
-
-#[component]
-pub(super) fn AccountsStep() -> Element {
-    let ws = use_context::<Ws>();
-    let mut settings = ws.settings;
-    let mut refresh = ws.refresh;
-    let p = ws.proj.read().clone();
-    let plat = p.platform_type.clone();
-
-    // .env files and profiles may have changed since the last look.
-    use_effect(move || refresh.with_mut(|n| *n += 1));
-
-    let mut identities = use_signal(Vec::<String>::new);
-    let mut profiles = use_signal(Vec::<ProfileInfo>::new);
-    use_effect(move || {
-        spawn(async move {
-            identities.set(tokio::task::spawn_blocking(discover_identities).await.unwrap_or_default());
-            profiles.set(tokio::task::spawn_blocking(discover_profiles).await.unwrap_or_default());
-        });
-    });
-
-    let identity = settings.read().apple_identity.clone();
-    let bundle_id = p.ios_bundle_id.trim().to_string();
-    let creds = ws.creds.read().clone();
-    let selected = ws.profile.read().clone();
-
-    // Profiles for this app first, then App Store ones, then by name.
-    let mut sorted = profiles.read().clone();
-    sorted.sort_by(|a, b| {
-        b.matches_bundle(&bundle_id)
-            .cmp(&a.matches_bundle(&bundle_id))
-            .then((b.kind == ProfileKind::AppStore).cmp(&(a.kind == ProfileKind::AppStore)))
-            .then(a.name.cmp(&b.name))
-    });
-
-    rsx! {
-        if plat.has_ios() {
-            div { class: "card",
-                h2 { "Apple" }
-
-                div { class: "settings-field",
-                    label { "Signing identity" }
-                    if identities.read().is_empty() {
-                        input {
-                            class: "text-input",
-                            placeholder: "Apple Distribution: Name (TEAMID)",
-                            value: "{identity}",
-                            oninput: move |e: Event<FormData>| { settings.write().apple_identity = e.value(); save_settings(&settings()); },
-                        }
-                        p { class: "settings-hint", "No signing identities found in the keychain." }
-                    } else {
-                        select {
-                            class: "text-input",
-                            value: "{identity}",
-                            onchange: move |e: Event<FormData>| { settings.write().apple_identity = e.value(); save_settings(&settings()); },
-                            if identity.is_empty() {
-                                option { value: "", disabled: true, selected: true, "— choose identity —" }
-                            }
-                            for id in identities.read().iter() {
-                                option { value: "{id}", selected: *id == identity, "{id}" }
-                            }
-                        }
-                        p { class: "settings-hint", "From the keychain · shared by every project on this Mac" }
-                    }
-                }
-
-                div { class: "settings-field",
-                    label { "Provisioning profile" }
-                    if sorted.is_empty() {
-                        div { class: "settings-path-row",
-                            input {
-                                class: "text-input",
-                                placeholder: "/Users/you/Downloads/YourApp.mobileprovision",
-                                value: "{p.provisioning_profile}",
-                                oninput: move |e: Event<FormData>| ws.update(|p| p.provisioning_profile = e.value()),
-                            }
-                            {profile_browse_button(ws)}
-                        }
-                        p { class: "settings-hint", "No profiles found in ~/Library/MobileDevice/Provisioning Profiles" }
-                    } else {
-                        div { class: "settings-path-row",
-                            select {
-                                class: "text-input",
-                                value: "{p.provisioning_profile}",
-                                onchange: move |e: Event<FormData>| ws.update(|p| p.provisioning_profile = e.value()),
-                                if p.provisioning_profile.is_empty() {
-                                    option { value: "", disabled: true, selected: true, "— choose profile —" }
-                                }
-                                // A browsed-to profile outside the system folder stays selectable.
-                                if !p.provisioning_profile.is_empty() && !sorted.iter().any(|i| i.path == p.provisioning_profile) {
-                                    option { value: "{p.provisioning_profile}", selected: true, "{p.provisioning_profile}" }
-                                }
-                                for info in sorted.iter() {
-                                    option {
-                                        value: "{info.path}",
-                                        selected: info.path == p.provisioning_profile,
-                                        if info.matches_bundle(&bundle_id) {
-                                            "{info.name} · {info.kind.label()} · {info.app_id}"
-                                        } else {
-                                            "{info.name} · {info.kind.label()} · {info.app_id} (other app)"
-                                        }
-                                    }
-                                }
-                            }
-                            {profile_browse_button(ws)}
-                        }
-                        p { class: "settings-hint", "Per project — profiles belong to one bundle ID. Ones matching this app are listed first." }
-                    }
-                }
-
-                if let Some(info) = selected.as_ref() {
-                    ul { class: "check-list",
-                        for c in profile_checks(info, &bundle_id, &identity) {
-                            {check_row(ws, c.ok, c.label, c.detail, None)}
-                        }
-                    }
-                } else if !p.provisioning_profile.trim().is_empty() {
-                    ul { class: "check-list",
-                        {check_row(ws, false, "Profile readable", format!("Cannot read {}", p.provisioning_profile), None)}
-                    }
-                }
-
-                p { class: "export-section-label", "App Store Connect API key" }
-                ul { class: "check-list",
-                    for c in creds.app_store.iter().cloned() {
-                        {check_row(ws, c.ok, c.label, c.detail, None)}
-                    }
-                }
-                {connection_test(ws.asc_test.read().clone(), move |_| jobs::test_app_store(ws))}
-                p { class: "settings-hint",
-                    "Set the keys in the project's .env or fastlane/.env. Create the API key under Users and Access → Integrations in App Store Connect."
-                }
-            }
-        }
-
-        if plat.has_android() {
-            div { class: "card",
-                h2 { "Google Play" }
-                ul { class: "check-list",
-                    for c in creds.play.iter().cloned() {
-                        {check_row(ws, c.ok, c.label, c.detail, None)}
-                    }
-                }
-                {connection_test(ws.play_test.read().clone(), move |_| jobs::test_google_play(ws))}
-                p { class: "settings-hint",
-                    "Set GOOGLE_PLAY_JSON_KEY to the service account's JSON key file, in the project's .env or fastlane/.env. The account needs release access to this app in Play Console."
-                }
-
-                p { class: "export-section-label", "Upload key (signs your AABs)" }
-                ul { class: "check-list",
-                    for c in creds.android_signing.iter().cloned() {
-                        {check_row(ws, c.ok, c.label, c.detail, None)}
-                    }
-                }
-                p { class: "settings-hint",
-                    "Set ANDROID_KEYSTORE_PATH and ANDROID_KEYSTORE_PASSWORD in the project's .env (ANDROID_KEY_ALIAS if the alias isn't the project slug). Keep the keystore outside the project folder and backed up."
-                }
-            }
-        }
-
-        button {
-            class: "btn",
-            onclick: move |_| refresh.with_mut(|n| *n += 1),
-            "Re-read .env and profiles"
         }
     }
 }
@@ -523,6 +365,113 @@ pub(super) fn VersionStep() -> Element {
 // ---------------------------------------------------------------------------
 // 4 · Build
 // ---------------------------------------------------------------------------
+
+/// What the last build actually produced, folded unless something is wrong.
+fn build_checks(ws: Ws, checks: Vec<CredCheck>) -> Element {
+    if checks.is_empty() {
+        return rsx! {};
+    }
+    let bad = checks.iter().filter(|c| !c.ok).count();
+    rsx! {
+        details { class: "build-checks", open: bad > 0,
+            summary {
+                if bad == 0 { "Checked: signer, identifiers, version" } else { "{bad} problem(s) in this build" }
+            }
+            ul { class: "check-list",
+                for c in checks {
+                    {check_row(ws, c.ok, c.label, c.detail, None)}
+                }
+            }
+        }
+    }
+}
+
+/// Build prerequisites, checked when the step opens and after every fix.
+#[component]
+fn DoctorCard() -> Element {
+    let ws = use_context::<Ws>();
+    let mut items = use_signal(|| Option::<Vec<doctor::DoctorItem>>::None);
+    let mut fix_state = use_signal(|| JobState::Idle);
+    let mut rerun = use_signal(|| 0u32);
+
+    use_effect(move || {
+        rerun.read();
+        let dir = ws.dir();
+        let platform = ws.proj.peek().platform_type.clone();
+        let identity = ws.settings.peek().apple_identity.clone();
+        spawn(async move {
+            let found = tokio::task::spawn_blocking(move || doctor::run(&dir, &platform, &identity)).await.unwrap_or_default();
+            items.set(Some(found));
+        });
+    });
+
+    let Some(list) = items() else {
+        return rsx! {
+            div { class: "card build-status-card",
+                div { class: "publish-status-row", span { class: "spinner spinner-dark" } span { class: "publish-status publish-running", "Checking build tools…" } }
+            }
+        };
+    };
+    let problems = list.iter().filter(|i| !i.ok).count();
+
+    rsx! {
+        details { class: "card doctor", open: problems > 0,
+            summary {
+                if problems == 0 {
+                    span { class: "publish-status publish-success", {icon_check()} "Build tools ready" }
+                } else {
+                    span { class: "publish-status publish-error", {icon_alert()} "{problems} thing(s) to fix before building" }
+                }
+            }
+            for section in ["Tools", "Android", "iOS"] {
+                if list.iter().any(|i| i.section == section) {
+                    p { class: "export-section-label", "{section}" }
+                    ul { class: "check-list",
+                        for item in list.iter().filter(|i| i.section == section).cloned() {
+                            li { class: if item.ok { "check-row check-ok" } else { "check-row check-bad" },
+                                span { class: "check-mark", if item.ok { {icon_check()} } else { {icon_alert()} } }
+                                div { class: "check-text",
+                                    div { class: "check-head",
+                                        span { class: "check-label", "{item.label}" }
+                                        if let Some(fix) = item.fix.clone() {
+                                            button {
+                                                class: "check-fix",
+                                                disabled: matches!(fix_state(), JobState::Running(_)),
+                                                onclick: move |_| {
+                                                    if let doctor::Fix::GoTo(step) = fix {
+                                                        ws.go(step);
+                                                        return;
+                                                    }
+                                                    let (fix, dir) = (fix.clone(), ws.dir());
+                                                    fix_state.set(JobState::Running(format!("{}…", fix.label())));
+                                                    spawn(async move {
+                                                        let r = tokio::task::spawn_blocking(move || doctor::apply(&dir, &fix)).await.unwrap_or_else(|e| Err(e.to_string()));
+                                                        fix_state.set(match r {
+                                                            Ok(m) => JobState::Ok(m),
+                                                            Err(e) => JobState::Failed(e),
+                                                        });
+                                                        rerun.with_mut(|n| *n += 1);
+                                                    });
+                                                },
+                                                "{fix.label()}"
+                                            }
+                                        }
+                                    }
+                                    span { class: "check-detail", "{item.detail}" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            div { class: "conn-test",
+                button { class: "btn btn-sm", onclick: move |_| rerun.with_mut(|n| *n += 1), "Check again" }
+                div { class: "publish-status-row", {job_status_line(fix_state(), "")} }
+            }
+        }
+    }
+}
+
 #[component]
 pub(super) fn BuildStep() -> Element {
     let ws = use_context::<Ws>();
@@ -547,6 +496,8 @@ pub(super) fn BuildStep() -> Element {
     };
 
     rsx! {
+        DoctorCard {}
+
         div { class: "card build-status-card",
             div { class: "publish-status-row",
                 {job_status_line(ws.job_state(JobKind::Build), "Ready — build scripts are regenerated in the project folder before each build.")}
@@ -562,6 +513,7 @@ pub(super) fn BuildStep() -> Element {
                     h2 { class: "build-ios-title", {icon_phone()} "iOS" }
                     {next_line(format!("Next: {} ({})", p.version.trim(), p.ios_build_number))}
                     {artifact_line(&artifacts.ipa, "IPA")}
+                    {build_checks(ws, ws.ipa_check.read().clone())}
                     button {
                         class: "btn btn-build btn-build-ios",
                         disabled: running,
@@ -582,6 +534,7 @@ pub(super) fn BuildStep() -> Element {
                     h2 { class: "build-android-title", {icon_package()} "Android" }
                     {next_line(format!("Next: {} ({})", p.version.trim(), p.android_version_code))}
                     {artifact_line(&artifacts.aab, "AAB")}
+                    {build_checks(ws, ws.aab_check.read().clone())}
                     button {
                         class: "btn btn-build btn-build-android",
                         disabled: running,
@@ -1217,6 +1170,64 @@ pub(super) fn MetadataStep() -> Element {
 // 8 · Submit
 // ---------------------------------------------------------------------------
 
+/// What the stores show right now, fetched on demand.
+#[component]
+fn StoreStatusCard() -> Element {
+    let ws = use_context::<Ws>();
+    let lines = use_signal(Vec::<(String, String)>::new);
+    let state = use_signal(|| JobState::Idle);
+    let plat = ws.proj.read().platform_type.clone();
+    rsx! {
+        div { class: "card",
+            h2 { "In the stores now" }
+            if !lines.read().is_empty() {
+                ul { class: "check-list",
+                    for (store, text) in lines.read().iter().cloned() {
+                        li { class: "check-row",
+                            div { class: "check-text",
+                                span { class: "check-label", "{store}" }
+                                span { class: "check-detail", "{text}" }
+                            }
+                        }
+                    }
+                }
+            }
+            div { class: "conn-test",
+                button {
+                    class: "btn btn-sm",
+                    disabled: matches!(state(), JobState::Running(_)),
+                    onclick: move |_| jobs::fetch_store_status(ws, lines, state),
+                    "Refresh from the stores"
+                }
+                div { class: "publish-status-row", {job_status_line(state(), "Version states from App Store Connect, tracks from Google Play")} }
+            }
+            p { class: "settings-hint",
+                "Not available through the APIs — check in the consoles: "
+                if plat.has_android() {
+                    a { href: "https://play.google.com/console", target: "_blank", "Play Console" }
+                    " (upload key reset, policy inbox, developer verification)"
+                }
+                if plat.has_android() && plat.has_ios() { " · " }
+                if plat.has_ios() {
+                    a { href: "https://appstoreconnect.apple.com", target: "_blank", "App Store Connect" }
+                    " (review messages)"
+                }
+            }
+        }
+    }
+}
+
+/// Submit checklist row summarising the build checks.
+fn build_check_row(ws: Ws, checks: Vec<CredCheck>) -> Element {
+    let bad: Vec<&CredCheck> = checks.iter().filter(|c| !c.ok).collect();
+    let detail = match bad.first() {
+        None if checks.is_empty() => "Checking…".to_string(),
+        None => "Signer, identifiers, version and target all fine".to_string(),
+        Some(c) => format!("{}: {}", c.label, c.detail),
+    };
+    check_row(ws, bad.is_empty() && !checks.is_empty(), "Build checks", detail, Some(Step::Build))
+}
+
 /// One numbered stage inside a store card: title, what it does, status, action.
 fn release_stage(title: &str, hint: String, state: JobState, idle: &str, body: Element) -> Element {
     rsx! {
@@ -1287,6 +1298,9 @@ pub(super) fn SubmitStep() -> Element {
                             format!("{} files · {ios_langs} of {} languages", ios_shots.len(), p.locales.len()), Some(Step::Screenshots))}
                         {check_row(ws, artifacts.ipa.is_some(), "IPA",
                             artifacts.ipa.as_ref().map(|a| a.summary()).unwrap_or_else(|| "Not built yet".into()), Some(Step::Build))}
+                        if artifacts.ipa.is_some() {
+                            {build_check_row(ws, ws.ipa_check.read().clone())}
+                        }
                     }
 
                     {release_stage("1 · Listing",
@@ -1328,6 +1342,9 @@ pub(super) fn SubmitStep() -> Element {
                             format!("{} files", android_shots.len()), Some(Step::Screenshots))}
                         {check_row(ws, artifacts.aab.is_some(), "AAB",
                             artifacts.aab.as_ref().map(|a| a.summary()).unwrap_or_else(|| "Not built yet".into()), Some(Step::Build))}
+                        if artifacts.aab.is_some() {
+                            {build_check_row(ws, ws.aab_check.read().clone())}
+                        }
                     }
 
                     {release_stage("1 · Listing",
@@ -1364,6 +1381,8 @@ pub(super) fn SubmitStep() -> Element {
                 }
             }
         }
+
+        StoreStatusCard {}
 
         div { class: "card",
             h2 { "History" }
