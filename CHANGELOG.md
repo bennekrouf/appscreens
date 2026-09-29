@@ -58,6 +58,21 @@ user sees in the update prompt should all be accounted for.
   revoke and replace, in order, filled in with this project's own key IDs and
   linking straight to each console page.
 
+- The Build step shows every Java installed on the machine — Android Studio's,
+  Homebrew, SDKMAN, system installs, and on Windows the registry — marks the
+  ones too old or too new for the Gradle version your project builds with,
+  and lets you pick which one AppScreens uses. Your terminal and system
+  settings are left alone, so there is no JAVA_HOME to set up by hand.
+- When no suitable Java is installed, the Java card offers to install one that
+  fits your project: Homebrew (inside AppScreens, no password) or the Temurin
+  installer on macOS, your package manager in a terminal on Linux, winget on
+  Windows — and picks it up as soon as it's done.
+- If you want the same Java in your own terminal, the Java card can add it to
+  your shell profile (zsh, bash or fish) or your Windows user settings. You see
+  the exact lines first, your profile is backed up, and Remove takes them out
+  again. "Check my terminal" opens a fresh shell and shows which Java it and
+  your project's Gradle really use.
+
 ### Fixed
 
 - Signing and Android builds no longer fail with "Unable to locate a Java

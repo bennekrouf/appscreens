@@ -44,35 +44,11 @@ fn run(cmd: &mut Command) -> Result<String, String> {
 // Java (keytool, jarsigner, and Gradle's runtime)
 // ---------------------------------------------------------------------------
 
-/// A usable JDK home. An app started from the Dock has no shell PATH, and
-/// macOS's /usr/bin/keytool is only a stub that asks for Java — so look for a
-/// real one: JAVA_HOME, macOS's registry, Android Studio's bundled runtime
-/// (always present when Android builds work), then Homebrew.
+/// The JDK home AppScreens uses — chosen in the Build step, else the
+/// recommended one (see `java`). An app started from the Dock has no shell
+/// PATH, and macOS's /usr/bin/keytool is only a stub that asks for Java.
 pub(super) fn java_home() -> Option<PathBuf> {
-    let valid = |p: &Path| p.join("bin/java").is_file() && p.join("bin/keytool").is_file();
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Ok(h) = std::env::var("JAVA_HOME") {
-        candidates.push(h.into());
-    }
-    if let Ok(out) = Command::new("/usr/libexec/java_home").output() {
-        if out.status.success() {
-            candidates.push(String::from_utf8_lossy(&out.stdout).trim().into());
-        }
-    }
-    candidates.push("/Applications/Android Studio.app/Contents/jbr/Contents/Home".into());
-    for brew in ["/opt/homebrew/opt", "/usr/local/opt"] {
-        let mut jdks: Vec<PathBuf> = std::fs::read_dir(brew)
-            .map(|d| {
-                d.flatten()
-                    .filter(|e| e.file_name().to_string_lossy().starts_with("openjdk"))
-                    .map(|e| e.path().join("libexec/openjdk.jdk/Contents/Home"))
-                    .collect()
-            })
-            .unwrap_or_default();
-        jdks.sort();
-        candidates.extend(jdks);
-    }
-    candidates.into_iter().find(|p| valid(p))
+    java::selected().map(|j| j.home)
 }
 
 /// A JDK tool ("keytool", "jarsigner"…) from `java_home`, else from PATH.

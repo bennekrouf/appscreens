@@ -13,8 +13,10 @@ mod accounts;
 mod checks;
 mod consistency;
 mod doctor;
+mod java;
 mod jobs;
 mod repo;
+mod shellenv;
 mod signing;
 mod steps;
 mod stores;
@@ -792,6 +794,8 @@ pub(crate) fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> E
         drawer_job: use_signal(|| JobKind::Screenshots),
     };
     use_context_provider(|| ws);
+    // The JDK chosen in the Build step applies to everything AppScreens runs.
+    use_hook(move || java::set_preferred(&settings.peek().java_home));
 
     // Inspect each newly built bundle once (off the UI thread).
     use_effect(move || {
