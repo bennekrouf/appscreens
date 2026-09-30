@@ -15,6 +15,27 @@ Each heading is dated on the day its tag was pushed. Releases that carried only
 build or packaging work say so rather than being hidden: the version numbers a
 user sees in the update prompt should all be accounted for.
 
+## [Unreleased]
+
+### Added
+
+- Setting up the App Store Connect API key no longer means editing `.env` by
+  hand. If another of your projects already has a key, one click reuses it —
+  one key works for every app of your team. Otherwise the Apple card walks you
+  through creating one, with a link straight to the right App Store Connect
+  page. It then picks up the downloaded `.p8`, reads the Key ID from its file
+  name, keeps a private copy in your keys folder (Apple lets you download it
+  only once), saves everything to the project's `.env` and tests the
+  connection.
+- "Add profile…" next to the provisioning profile list installs a profile you
+  downloaded from Apple Developer and selects it, with a link to your
+  profiles there.
+
+### Fixed
+
+- Provisioning profiles downloaded by Xcode 16 now appear in the profile list;
+  only the older profiles folder used to be read.
+
 ## [0.1.19] - 2026-09-29
 
 ### Added

@@ -102,18 +102,46 @@ pub(super) fn read_profile(path: &std::path::Path) -> Option<ProfileInfo> {
     })
 }
 
-/// Every installed profile that could be read.
+/// Where profiles are installed: the classic folder (build scripts and older
+/// Xcode) and Xcode 16's own.
+fn profile_dirs() -> [std::path::PathBuf; 2] {
+    let home = dirs::home_dir().unwrap_or_default();
+    [
+        home.join("Library/MobileDevice/Provisioning Profiles"),
+        home.join("Library/Developer/Xcode/UserData/Provisioning Profiles"),
+    ]
+}
+
+/// Every installed profile that could be read, once each (same UUID file name
+/// in both folders counts once).
 pub(super) fn discover_profiles() -> Vec<ProfileInfo> {
-    let dir = dirs::home_dir()
-        .unwrap_or_default()
-        .join("Library/MobileDevice/Provisioning Profiles");
-    let Ok(entries) = std::fs::read_dir(&dir) else { return vec![] };
-    entries
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
+    let mut seen = std::collections::HashSet::new();
+    profile_dirs()
+        .iter()
+        .filter_map(|dir| std::fs::read_dir(dir).ok())
+        .flat_map(|entries| entries.filter_map(|e| e.ok()).map(|e| e.path()))
         .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("mobileprovision"))
+        .filter(|p| seen.insert(p.file_name().map(|n| n.to_os_string())))
         .filter_map(|p| read_profile(&p))
         .collect()
+}
+
+/// Install a profile (its raw bytes) where Xcode and the build scripts find
+/// it, named by its UUID as Xcode does. Returns the installed path.
+pub(super) fn install_profile(content: &[u8]) -> Result<std::path::PathBuf, String> {
+    install_profile_in(&profile_dirs()[0], content)
+}
+
+fn install_profile_in(folder: &std::path::Path, content: &[u8]) -> Result<std::path::PathBuf, String> {
+    let text = String::from_utf8_lossy(content);
+    let uuid = plist_value(&text, "UUID").ok_or("This isn't a provisioning profile (no UUID inside)")?;
+    if plist_value(&text, "application-identifier").is_none() {
+        return Err("This profile has no app identifier".into());
+    }
+    std::fs::create_dir_all(folder).map_err(|e| e.to_string())?;
+    let path = folder.join(format!("{uuid}.mobileprovision"));
+    std::fs::write(&path, content).map_err(|e| e.to_string())?;
+    Ok(path)
 }
 
 /// Team ID from an identity like "Apple Distribution: Jane Doe (AB12CD34EF)".
@@ -457,6 +485,17 @@ mod tests {
         assert_eq!(read_profile(&write_profile("dev", &dev)).unwrap().kind, ProfileKind::Development);
         let adhoc = PROFILE.replace("<key>Name</key>", "<key>ProvisionedDevices</key><array><string>x</string></array><key>Name</key>");
         assert_eq!(read_profile(&write_profile("adhoc", &adhoc)).unwrap().kind, ProfileKind::AdHoc);
+    }
+
+    #[test]
+    fn installs_a_profile_under_its_uuid() {
+        let body = PROFILE.replace("<key>Name</key>", "<key>UUID</key>\n    <string>0bc1-test-uuid</string>\n    <key>Name</key>");
+        let folder = std::env::temp_dir().join("appscreens-test-profiles");
+        let _ = std::fs::remove_dir_all(&folder);
+        let path = install_profile_in(&folder, body.as_bytes()).unwrap();
+        assert_eq!(path, folder.join("0bc1-test-uuid.mobileprovision"));
+        assert_eq!(read_profile(&path).unwrap().app_id, "com.acme.app");
+        assert!(install_profile_in(&folder, b"hello").is_err());
     }
 
     #[test]

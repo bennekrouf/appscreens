@@ -10,9 +10,11 @@ use super::*;
 use std::time::SystemTime;
 
 mod accounts;
+mod asckey;
 mod checks;
 mod consistency;
 mod doctor;
+mod envfile;
 mod java;
 mod jobs;
 mod repo;

@@ -1691,12 +1691,7 @@ pub(super) fn repair_profile(ws: Ws) {
                 }
             }
             let content = stores::asc_create_app_store_profile(&jwt, &name, &bundle_res, &cert.id).await?;
-            let text = String::from_utf8_lossy(&content).to_string();
-            let uuid = checks::plist_value(&text, "UUID").ok_or("The new profile has no UUID")?;
-            let folder = dirs::home_dir().unwrap_or_default().join("Library/MobileDevice/Provisioning Profiles");
-            std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
-            let path = folder.join(format!("{uuid}.mobileprovision"));
-            std::fs::write(&path, &content).map_err(|e| e.to_string())?;
+            let path = checks::install_profile(&content)?;
             Ok(path.to_string_lossy().to_string())
         }
         .await;
