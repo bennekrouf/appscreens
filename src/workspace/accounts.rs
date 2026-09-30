@@ -265,7 +265,34 @@ fn AppleCard() -> Element {
                         }
                     }
                 }
-                p { class: "settings-hint", "Per project — profiles belong to one bundle ID. Ones matching this app are listed first." }
+                div { class: "install-actions",
+                    button {
+                        class: "btn btn-sm",
+                        onclick: move |_| {
+                            spawn(async move {
+                                let Some(path) = pick_file("Add a provisioning profile", ("Provisioning profile", &["mobileprovision"])).await else {
+                                    return;
+                                };
+                                let mut state = ws.profile_job;
+                                let installed = std::fs::read(&path).map_err(|e| e.to_string()).and_then(|b| install_profile(&b));
+                                match installed.and_then(|p| read_profile(&p).map(|i| (p, i)).ok_or("Installed, but it can't be read".to_string())) {
+                                    Ok((installed, info)) => {
+                                        ws.update(|p| p.provisioning_profile = installed.to_string_lossy().to_string());
+                                        let mut refresh = ws.refresh;
+                                        refresh.with_mut(|n| *n += 1);
+                                        state.set(JobState::Ok(format!("{} installed and selected", info.name)));
+                                    }
+                                    Err(e) => state.set(JobState::Failed(e)),
+                                }
+                            });
+                        },
+                        "Add profile…"
+                    }
+                    a { class: "btn btn-sm", href: "https://developer.apple.com/account/resources/profiles/list", target: "_blank", "Profiles on Apple Developer" }
+                }
+                p { class: "settings-hint",
+                    "Per project — profiles belong to one bundle ID. Ones matching this app are listed first. Downloaded one from Apple Developer? Add it here: it's installed for Xcode and the build too."
+                }
             }
 
             if let Some(info) = selected.as_ref() {
@@ -295,11 +322,184 @@ fn AppleCard() -> Element {
                     {check_row(ws, c.ok, c.label, c.detail, None)}
                 }
             }
+            if asc_ok {
+                details { class: "inline-form",
+                    summary { "Use a different key" }
+                    AscKeySetup {}
+                }
+            } else {
+                AscKeySetup {}
+            }
             {connection_test(ws.asc_test.read().clone(), move |_| jobs::test_app_store(ws))}
-            p { class: "settings-hint",
-                "Set the keys in the project's .env or fastlane/.env. Create the API key under Users and Access → Integrations in App Store Connect."
+        }
+    }
+}
+
+/// Get the three App Store Connect values into the project without hunting:
+/// reuse another project's key, or walk through creating one with the page
+/// links, picking up the downloaded .p8 and its Key ID automatically.
+#[component]
+fn AscKeySetup() -> Element {
+    let ws = use_context::<Ws>();
+    let mut others = use_signal(Vec::<asckey::AscKey>::new);
+    let mut p8s = use_signal(Vec::<(PathBuf, String)>::new);
+    let mut key_id = use_signal(String::new);
+    let mut issuer = use_signal(String::new);
+    let mut p8 = use_signal(|| Option::<PathBuf>::None);
+    let mut state = use_signal(|| JobState::Idle);
+
+    use_effect(move || {
+        ws.refresh.read();
+        let projects = ws.settings.peek().recent_projects.clone();
+        let (dir, keys) = (ws.dir(), keys_dir(&ws.settings.peek()));
+        spawn(async move {
+            let (o, f) = tokio::task::spawn_blocking(move || (asckey::from_other_projects(&projects, &dir), asckey::find_p8s(&keys)))
+                .await
+                .unwrap_or_default();
+            // The Issuer ID is the same for every key of the team.
+            if issuer.peek().is_empty() {
+                if let Some(k) = o.first() {
+                    issuer.set(k.issuer_id.clone());
+                }
+            }
+            // A single downloaded key is almost certainly the one just made.
+            if p8.peek().is_none() && f.len() == 1 {
+                key_id.set(f[0].1.clone());
+                p8.set(Some(f[0].0.clone()));
+            }
+            others.set(o);
+            p8s.set(f);
+        });
+    });
+
+    // Save into the project's .env, then prove it works.
+    let mut save = move |key: asckey::AscKey| {
+        let dir = ws.dir();
+        let keys = keys_dir(&ws.settings.peek());
+        let result = asckey::keep_in_keys_dir(&key.p8, &key.key_id, &keys).and_then(|kept| {
+            let path = kept.to_string_lossy().to_string();
+            envfile::set_values(
+                &dir,
+                &[(asckey::KEY_ID_VAR, &key.key_id), (asckey::ISSUER_VAR, &key.issuer_id), (asckey::P8_VAR, &path)],
+            )
+            .map(|_| kept)
+        });
+        match result {
+            Ok(kept) => {
+                state.set(JobState::Ok(format!("Saved in the project's .env · key kept at {}", kept.display())));
+                let mut refresh = ws.refresh;
+                refresh.with_mut(|n| *n += 1);
+                jobs::test_app_store(ws);
+            }
+            Err(e) => state.set(JobState::Failed(e)),
+        }
+    };
+
+    let (kid, iss) = (key_id(), issuer());
+    let problem = if p8().is_none() {
+        Some("Choose the downloaded .p8 key")
+    } else if !asckey::valid_key_id(kid.trim()) {
+        Some("The Key ID is 10 capital letters and digits")
+    } else if !asckey::valid_issuer(iss.trim()) {
+        Some("The Issuer ID looks like 69a6de97-00e6-47e3-e053-5b8c7c11a4d1")
+    } else {
+        None
+    };
+
+    rsx! {
+        if !others.read().is_empty() {
+            p { class: "settings-hint", "One key works for every app of your team — this Mac already has one:" }
+            for k in others.read().iter().cloned() {
+                div { class: "install-option",
+                    div { class: "check-text",
+                        span { class: "check-label", "Key {k.key_id}" }
+                        span { class: "check-detail", "Used by {k.from} · {k.p8.display()}" }
+                    }
+                    div { class: "install-actions",
+                        button { class: "btn btn-sm", onclick: move |_| save(k.clone()), "Use this key" }
+                    }
+                }
             }
         }
+        details { class: "inline-form", open: others.read().is_empty(),
+            summary { if others.read().is_empty() { "Set up a key" } else { "Or create a new key" } }
+            ol { class: "lost-steps",
+                li {
+                    "Open "
+                    a { href: asckey::KEYS_PAGE, target: "_blank", "App Store Connect → Users and Access → Integrations" }
+                    ". The first time, the Account Holder has to click Request Access."
+                }
+                li {
+                    "Click + to generate a key. Name it AppScreens. Access: Admin lets AppScreens also create certificates and profiles; App Manager is enough for uploads and review."
+                }
+                li { "Download the key right away — Apple lets you download it only once. AppScreens keeps a copy in your keys folder." }
+                li { "The Issuer ID is shown above the list of keys on the same page." }
+            }
+            div { class: "build-config-grid",
+                div { class: "build-config-field",
+                    label { class: "build-config-label", "Private key (.p8)" }
+                    if p8s.read().len() > 1 {
+                        select {
+                            class: "text-input",
+                            onchange: move |e: Event<FormData>| {
+                                let v = e.value();
+                                if let Some((path, id)) = p8s.peek().iter().find(|(p, _)| p.to_string_lossy() == v).cloned() {
+                                    key_id.set(id);
+                                    p8.set(Some(path));
+                                }
+                            },
+                            option { value: "", selected: p8().is_none(), disabled: true, "— downloaded keys —" }
+                            for (path, id) in p8s.read().iter() {
+                                option { value: "{path.display()}", selected: p8().as_ref() == Some(path), "{id} · {path.display()}" }
+                            }
+                        }
+                    } else if let Some(path) = p8() {
+                        p { class: "settings-hint", "{path.display()}" }
+                    }
+                    button {
+                        class: "btn btn-sm",
+                        onclick: move |_| {
+                            spawn(async move {
+                                if let Some(path) = pick_file("Choose the App Store Connect key", ("App Store Connect key", &["p8"])).await {
+                                    if let Some(id) = asckey::key_id_from_file(&path) {
+                                        key_id.set(id);
+                                    }
+                                    p8.set(Some(path));
+                                }
+                            });
+                        },
+                        "Choose .p8…"
+                    }
+                }
+                div { class: "build-config-field",
+                    label { class: "build-config-label", "Key ID" }
+                    input { class: "text-input", placeholder: "From the file name, e.g. 4TALSPNY5Y", value: "{kid}", oninput: move |e| key_id.set(e.value().trim().to_uppercase()) }
+                }
+                div { class: "build-config-field",
+                    label { class: "build-config-label", "Issuer ID" }
+                    input { class: "text-input", placeholder: "Above the keys list", value: "{iss}", oninput: move |e| issuer.set(e.value().trim().to_string()) }
+                }
+            }
+            div { class: "conn-test",
+                button {
+                    class: "btn btn-sm",
+                    disabled: problem.is_some(),
+                    onclick: move |_| {
+                        if let Some(path) = p8() {
+                            save(asckey::AscKey { key_id: key_id().trim().into(), issuer_id: issuer().trim().into(), p8: path, from: String::new() });
+                        }
+                    },
+                    "Save and test"
+                }
+                if let Some(pb) = problem {
+                    span { class: "settings-hint", "{pb}" }
+                }
+            }
+            p { class: "settings-hint",
+                a { href: asckey::HELP_PAGE, target: "_blank", "Apple's guide to API keys" }
+            }
+        }
+        div { class: "publish-status-row", {job_status_line(state(), "")} }
     }
 }
 
