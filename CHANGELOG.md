@@ -15,6 +15,24 @@ Each heading is dated on the day its tag was pushed. Releases that carried only
 build or packaging work say so rather than being hidden: the version numbers a
 user sees in the update prompt should all be accounted for.
 
+## [Unreleased]
+
+### Added
+
+- The Google Play service-account key gets the same help. If another of your
+  projects already uses one, one click reuses it. Otherwise the Google Play
+  card walks you through it: enable the API, create the service account and
+  its JSON key, and invite it in Play Console, each step linking to the right
+  page. It then picks up the downloaded JSON key and keeps a private copy in
+  your keys folder. The email to invite comes with a Copy button. Finally it
+  saves the key's location to the project's `.env` and tests the connection.
+
+### Changed
+
+- The "Create a Distribution certificate" form explains each field, and warns
+  when the keychain already has one: Apple allows very few per team, and your
+  profiles are tied to the one you have.
+
 ## [0.1.20] - 2026-09-30
 
 ### Added
