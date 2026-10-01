@@ -564,6 +564,15 @@ pub(super) fn run_build(ws: Ws, script_name: String) {
         return;
     }
 
+    // Resolved afresh: the project's .env may have changed since the card was drawn.
+    if script_name == "build_android_release.sh" && !resolve_android_signing(&proj_dir, &keystore_setting, &alias).0.ok() {
+        build_phase.set(BuildPhase::Error(
+            "The Android upload key isn't set up. Choose or create it in the Accounts step, under Android upload key.".into(),
+        ));
+        ws.show_job(JobKind::Build);
+        return;
+    }
+
     build_phase.set(BuildPhase::Running(script_name.clone()));
     build_log.set(Vec::new());
     let mut last_build = ws.last_build;

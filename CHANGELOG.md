@@ -15,6 +15,31 @@ Each heading is dated on the day its tag was pushed. Releases that carried only
 build or packaging work say so rather than being hidden: the version numbers a
 user sees in the update prompt should all be accounted for.
 
+## [Unreleased]
+
+### Added
+
+- The Android upload key card lists the keystores already on your Mac (in your
+  keys folder and the project) with a Use button, so picking yours no longer
+  means browsing for it.
+
+### Changed
+
+- Building an AAB without an upload key no longer starts a build that fails
+  halfway: the Build step shows the missing key with a link to the Accounts
+  step, and the build button says where to set it up. The build script's own
+  message now points to the same place before mentioning the project's `.env`.
+
+### Fixed
+
+- Opened from the Dock or Finder, AppScreens no longer reports "dx not found"
+  or missing Rust targets when the Dioxus CLI and rustup are installed. It now
+  finds the tools in your Rust install folder and your terminal's settings,
+  and the build scripts it runs find them too.
+- When another program called `dx` comes first (Homebrew's deno installs
+  one), the check now says so instead of reporting a wrong Dioxus version, and
+  builds use the Dioxus CLI.
+
 ## [0.1.21] - 2026-10-01
 
 ### Added
