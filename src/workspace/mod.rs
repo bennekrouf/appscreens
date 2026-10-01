@@ -17,6 +17,7 @@ mod doctor;
 mod envfile;
 mod java;
 mod jobs;
+mod playkey;
 mod repo;
 mod shellenv;
 mod signing;
