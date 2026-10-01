@@ -179,6 +179,22 @@ pub(super) fn create_upload_key(keystore: &Path, alias: &str, password: &str, dn
     Ok(pem)
 }
 
+/// Upload keystores lying in `folders` (not recursive): `.jks` and `.keystore`
+/// files, except Android's debug keystore. Sorted, each listed once.
+pub(super) fn find_keystores(folders: &[PathBuf]) -> Vec<PathBuf> {
+    let mut found: Vec<PathBuf> = folders
+        .iter()
+        .filter_map(|dir| std::fs::read_dir(dir).ok())
+        .flat_map(|entries| entries.flatten().map(|e| e.path()))
+        .filter(|p| p.is_file())
+        .filter(|p| matches!(p.extension().and_then(|e| e.to_str()), Some("jks" | "keystore")))
+        .filter(|p| p.file_name().is_some_and(|n| n != "debug.keystore"))
+        .collect();
+    found.sort();
+    found.dedup();
+    found
+}
+
 /// SHA-256 fingerprint of one key's certificate, as Play Console shows it.
 pub(super) fn upload_key_fingerprint(keystore: &Path, alias: &str, password: &str) -> Result<String, String> {
     let out = run(Command::new(jdk_tool("keytool"))
@@ -406,6 +422,19 @@ pub(super) fn keychain_identity_hashes() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finds_upload_keystores_but_not_debug_or_apple_files() {
+        let dir = std::env::temp_dir().join("appscreens-test-find-keystores");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("nested")).unwrap();
+        for name in ["upload.jks", "old.keystore", "debug.keystore", "apple.p12", "notes.txt", "nested/deep.jks"] {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        let found = find_keystores(&[dir.clone(), dir.clone(), dir.join("missing")]);
+        assert_eq!(found, vec![dir.join("old.keystore"), dir.join("upload.jks")]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn distinguished_names_drop_commas() {

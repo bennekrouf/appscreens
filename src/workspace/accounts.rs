@@ -729,6 +729,12 @@ fn UploadKeyCard() -> Element {
 
     let keystore_path = android.keystore.clone();
     let has_keystore = keystore_path.as_ref().is_some_and(|k| k.is_file());
+    // Keystores already on this Mac, offered while none is set: the keys folder and the project.
+    let found = if has_keystore || android.keystore_from_env {
+        Vec::new()
+    } else {
+        signing::find_keystores(&[keys_dir(&settings.read()), ws.dir()])
+    };
 
     rsx! {
         div { class: "card",
@@ -778,6 +784,31 @@ fn UploadKeyCard() -> Element {
             ul { class: "check-list",
                 for c in android.checks() {
                     {check_row(ws, c.ok, c.label, c.detail, None)}
+                }
+            }
+
+            if !found.is_empty() {
+                div { class: "settings-field",
+                    label { "Found on this Mac" }
+                    for ks in found {
+                        {
+                            let path = ks.to_string_lossy().to_string();
+                            rsx! {
+                                div { key: "{path}", class: "settings-path-row",
+                                    span { class: "settings-hint", "{path}" }
+                                    button {
+                                        class: "btn btn-sm",
+                                        onclick: move |_| {
+                                            settings.write().android_keystore_path = path.clone();
+                                            save_settings(&settings());
+                                            refresh.with_mut(|n| *n += 1);
+                                        },
+                                        "Use"
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 

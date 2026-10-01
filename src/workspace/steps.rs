@@ -933,6 +933,11 @@ pub(super) fn BuildStep() -> Element {
                     {next_line(format!("Next: {} ({})", p.version.trim(), p.android_version_code))}
                     {artifact_line(&artifacts.aab, "AAB")}
                     {build_checks(ws, ws.aab_check.read().clone())}
+                    if !ws.android.read().ok() {
+                        ul { class: "check-list",
+                            {check_row(ws, false, "Upload key", "Not set up yet — the AAB can't be signed without it".into(), Some(Step::Accounts))}
+                        }
+                    }
                     button {
                         class: "btn btn-build btn-build-android",
                         disabled: running,

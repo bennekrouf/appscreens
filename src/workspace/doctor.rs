@@ -56,9 +56,24 @@ fn output(cmd: &mut Command) -> Option<String> {
     out.status.success().then_some(text)
 }
 
-/// "dioxus 0.7.10 (57d6794)" → "0.7.10"
-pub(super) fn dx_version_from(text: &str) -> Option<String> {
-    text.split_whitespace().nth(1).map(str::to_string)
+/// What `dx --version` found.
+#[derive(Debug, PartialEq)]
+pub(super) enum Dx {
+    Missing,
+    /// Another program named `dx` — Homebrew's deno ships one.
+    Other(String),
+    /// The Dioxus CLI, with its version.
+    Dioxus(String),
+}
+
+/// "dioxus 0.7.10 (57d6794)" → `Dioxus("0.7.10")`; "deno 2.9.7 (…)" → `Other("deno")`
+pub(super) fn dx_from(version_output: Option<&str>) -> Dx {
+    let mut words = version_output.unwrap_or_default().split_whitespace();
+    match (words.next(), words.next()) {
+        (Some("dioxus"), Some(version)) => Dx::Dioxus(version.to_string()),
+        (Some(name), _) => Dx::Other(name.to_string()),
+        (None, _) => Dx::Missing,
+    }
 }
 
 /// The `dioxus` version pinned in a Cargo.lock.
@@ -116,24 +131,33 @@ pub(super) fn run(dir: &Path, platform: &PlatformType, apple_identity: &str) -> 
     };
 
     // ── dx and the project's Dioxus version ──────────────────────────────
-    let dx = output(Command::new("dx").arg("--version")).and_then(|o| dx_version_from(&o));
+    let dx = dx_from(output(Command::new("dx").arg("--version")).as_deref());
     let lib = std::fs::read_to_string(dir.join("Cargo.lock")).ok().and_then(|l| locked_dioxus(&l));
     items.push(match (&dx, &lib) {
-        (None, _) => DoctorItem {
+        (Dx::Missing, _) => DoctorItem {
             section: "Tools",
             label: "Dioxus CLI (dx)",
             ok: false,
             detail: "dx not found — install it with: cargo install dioxus-cli --locked".into(),
             fix: None,
         },
-        (Some(d), Some(l)) if d != l => DoctorItem {
+        (Dx::Other(name), _) => DoctorItem {
+            section: "Tools",
+            label: "Dioxus CLI (dx)",
+            ok: false,
+            detail: format!(
+                "the dx found is {name}'s, not the Dioxus CLI — install it with: cargo install dioxus-cli --locked"
+            ),
+            fix: None,
+        },
+        (Dx::Dioxus(d), Some(l)) if d != l => DoctorItem {
             section: "Tools",
             label: "dx matches the project",
             ok: false,
             detail: format!("dx is {d}, the project uses dioxus {l} — dx refuses to bundle a different version"),
             fix: Some(Fix::DioxusVersion(d.clone())),
         },
-        (Some(d), _) => DoctorItem {
+        (Dx::Dioxus(d), _) => DoctorItem {
             section: "Tools",
             label: "dx matches the project",
             ok: true,
@@ -316,7 +340,9 @@ mod tests {
 
     #[test]
     fn parses_versions_and_target_sdk() {
-        assert_eq!(dx_version_from("dioxus 0.7.10 (57d6794)").as_deref(), Some("0.7.10"));
+        assert_eq!(dx_from(Some("dioxus 0.7.10 (57d6794)")), Dx::Dioxus("0.7.10".into()));
+        assert_eq!(dx_from(Some("deno 2.9.7 (stable, release, aarch64-apple-darwin)")), Dx::Other("deno".into()));
+        assert_eq!(dx_from(None), Dx::Missing);
         let lock = "[[package]]\nname = \"dioxus-core\"\nversion = \"0.7.4\"\n\n[[package]]\nname = \"dioxus\"\nversion = \"0.7.10\"\n";
         assert_eq!(locked_dioxus(lock).as_deref(), Some("0.7.10"));
         assert_eq!(locked_dioxus("").as_deref(), None);

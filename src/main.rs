@@ -11,6 +11,7 @@ use std::path::PathBuf;
 
 mod update_check;
 mod notice;
+mod toolpath;
 mod workspace;
 
 use workspace::ProjectView;
@@ -863,7 +864,8 @@ set -e
 
 PROJECT_NAME="{project_slug}"
 
-# Signing — set in the project's .env (AppScreens passes it in):
+# Signing — AppScreens passes these in from Accounts → Android upload key
+# (password from the Keychain); run by hand, set them in the project's .env:
 #   ANDROID_KEYSTORE_PATH       upload keystore (.jks / .keystore)
 #   ANDROID_KEYSTORE_PASSWORD   its password
 #   ANDROID_KEY_ALIAS           optional, defaults to the project slug
@@ -900,7 +902,9 @@ fi
 
 # 0b. Check signing
 if [ -z "$KEYSTORE_PATH" ] || [ -z "$KEY_PASS" ]; then
-    echo "❌ Android signing is not set up. Add to the project's .env:"
+    echo "❌ Android signing is not set up."
+    echo "   In AppScreens: Accounts → Android upload key (the password stays in the Keychain)."
+    echo "   Running this script by hand? Add to the project's .env:"
     echo "   ANDROID_KEYSTORE_PATH=/path/to/upload-keystore.jks"
     echo "   ANDROID_KEYSTORE_PASSWORD=<its password>"
     exit 1
@@ -1403,6 +1407,8 @@ enum AndroidPublishPhase {
 // ---------------------------------------------------------------------------
 fn main() {
     tracing_subscriber::fmt::init();
+    // Before any thread starts: PATH is read by every command AppScreens runs.
+    toolpath::init();
 
     let config = dioxus::desktop::Config::new()
         // Injected into index.html's <head> before first paint, so there is no
