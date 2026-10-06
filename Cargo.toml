@@ -19,6 +19,10 @@ imageproc = "0.25"
 ab_glyph = "0.2"
 hex = "0.4"
 urlencoding = "2"
+base64 = "0.22"
+# The anonymous install id for usage statistics: 128 random bits. Already
+# in the tree via other crates, so this names a dependency rather than adding one.
+getrandom = "0.3"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 # Neither has an Android backend — rfd because SAF has no path-based dialog

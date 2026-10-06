@@ -348,6 +348,10 @@ jobs:
       # bundle step below reuses this binary instead of rebuilding, and the
       # signature survives into the installer.
       - name: Pre-build binary
+        env:
+          # Where anonymous usage statistics go (repository variable, not a
+          # secret). Unset, the build sends nothing and never asks.
+          MAYORANA_TELEMETRY_URL: ${{ vars.MAYORANA_TELEMETRY_URL }}
         run: cargo build --release
 
       - name: Sign application binary
