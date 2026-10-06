@@ -82,9 +82,11 @@ name = "appscreens"
 version = "0.1.22"
 dependencies = [
  "ab_glyph",
+ "base64",
  "dark-light",
  "dioxus",
  "dirs 5.0.1",
+ "getrandom 0.3.4",
  "hex",
  "image",
  "imageproc",

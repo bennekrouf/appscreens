@@ -9,6 +9,7 @@ use imageproc::drawing::{draw_text_mut, text_size};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+mod telemetry;
 mod update_check;
 mod notice;
 mod toolpath;
@@ -1617,6 +1618,9 @@ fn App() -> Element {
         // Small delay so we don't compete with the app's own boot work.
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
         if let Some(info) = update_check::check().await {
+            telemetry::record(telemetry::Event::UpdateOffered {
+                to: info.latest_version.clone(),
+            });
             update_info.set(Some(info));
         }
     });
@@ -1663,6 +1667,25 @@ fn App() -> Element {
         });
     });
 
+    // ── Anonymous usage statistics ─────────────────────────────────────────
+    // On by default, but only once the person has been told: `start` reads the
+    // opt-outs (including a shell profile's), records the launch, and says
+    // whether the notice is still owed. See telemetry.rs.
+    let mut ask_consent = use_signal(|| false);
+    use_coroutine(move |_rx: dioxus::prelude::UnboundedReceiver<()>| async move {
+        if telemetry::start().await {
+            ask_consent.set(true);
+        }
+        telemetry::flush_forever().await;
+    });
+    // Recorded while the notice is on screen, so collection starts from the
+    // next event — never from one the person had no chance to read about.
+    use_effect(move || {
+        if *ask_consent.read() {
+            telemetry::mark_informed();
+        }
+    });
+
     rsx! {
         // ── Update banner ──────────────────────────────────────────────────
         // Renders only when a newer release exists AND the user hasn't dismissed
@@ -1680,6 +1703,10 @@ fn App() -> Element {
                     class: "update-banner-link",
                     href: "{info.release_url}",
                     target: "_blank",
+                    onclick: {
+                        let to = info.latest_version.clone();
+                        move |_| telemetry::record(telemetry::Event::UpdateClicked { to: to.clone() })
+                    },
                     "Download"
                 }
                 button {
@@ -1688,6 +1715,34 @@ fn App() -> Element {
                     aria_label: "Dismiss update notice",
                     onclick: move |_| update_dismissed.set(true),
                     {icon_close()}
+                }
+            }
+        }
+
+        // Usage-statistics notice: once, at the bottom so it never sits under the
+        // update or notice banners. Either button is remembered.
+        if *ask_consent.read() {
+            div { class: "consent-banner",
+                span { class: "update-banner-text",
+                    strong { "AppScreens shares anonymous usage statistics. " }
+                    "Whether it is installed and opened, and its version and operating system \
+                     — never your files, data, accounts or anything you type."
+                }
+                button {
+                    class: "update-banner-link",
+                    onclick: move |_| {
+                        telemetry::set_consent(true);
+                        ask_consent.set(false);
+                    },
+                    "OK"
+                }
+                button {
+                    class: "update-banner-link",
+                    onclick: move |_| {
+                        telemetry::set_consent(false);
+                        ask_consent.set(false);
+                    },
+                    "Turn off"
                 }
             }
         }
