@@ -370,6 +370,11 @@ jobs:
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
 
+      # The licence page in the .msi (Dioxus.toml → bundle.windows.wix.license)
+      # comes from LICENSE, converted to the RTF that WiX reads.
+      - name: Write the installer's licence page
+        run: python scripts/license_rtf.py
+
       - name: Bundle
         run: dx bundle --platform desktop --release --package-types msi
 

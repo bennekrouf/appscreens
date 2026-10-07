@@ -23,6 +23,12 @@ icon = ["assets/icon.png"]
 # Uses assets/favicon.ico as the app icon on Windows
 # Set WIX_PATH in CI if you need a custom WiX toolset
 
+[bundle.windows.wix]
+# Shows the licence as a page the user accepts before installing. WiX reads it
+# as RTF; scripts/license_rtf.py writes it from LICENSE, and release CI reruns
+# it before bundling so the page always matches.
+license = "installer/LICENSE.rtf"
+
 [mobile]
 title = "AppScreens"
 bundle_identifier = "com.mayorana.appscreens"
