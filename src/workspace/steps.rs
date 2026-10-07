@@ -912,9 +912,12 @@ pub(super) fn BuildStep() -> Element {
                     {next_line(format!("Next: {} ({})", p.version.trim(), p.ios_build_number))}
                     {artifact_line(&artifacts.ipa, "IPA")}
                     {build_checks(ws, ws.ipa_check.read().clone())}
+                    if !cfg!(target_os = "macos") {
+                        p { class: "settings-hint", "iOS builds need a Mac with Xcode — Apple makes its build and signing tools only for macOS. Everything else for iOS (screenshots, store text, uploading the listing) works here." }
+                    }
                     button {
                         class: "btn btn-build btn-build-ios",
-                        disabled: running,
+                        disabled: running || !cfg!(target_os = "macos"),
                         onclick: move |_| jobs::run_build(ws, "build_ios_distribution.sh".into()),
                         if running_script == "build_ios_distribution.sh" {
                             span { class: "spinner" }

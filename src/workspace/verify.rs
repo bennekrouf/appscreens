@@ -13,7 +13,7 @@ fn check(label: &'static str, ok: bool, detail: impl Into<String>) -> CredCheck 
 
 /// SHA-256 fingerprint of the certificate that signed a jar-signed file (AAB).
 pub(super) fn signer_fingerprint(file: &Path) -> Option<String> {
-    let out = Command::new(signing::jdk_tool("keytool")).args(["-printcert", "-jarfile"]).arg(file).output().ok()?;
+    let out = Command::new(signing::jdk_tool("keytool")).quiet().args(["-printcert", "-jarfile"]).arg(file).output().ok()?;
     String::from_utf8_lossy(&out.stdout)
         .lines()
         .find_map(|l| l.trim().strip_prefix("SHA256:").map(|f| f.trim().to_string()))

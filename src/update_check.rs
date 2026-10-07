@@ -37,7 +37,7 @@ struct LatestJson {
     platforms: Platforms,
 }
 
-/// Builds per OS, keyed by package format (`dmg`, `msi`, `deb`,
+/// Builds per OS, keyed by package format (`dmg`, `exe`, `deb`,
 /// `appimage`…) — not by CPU architecture. A `BTreeMap` so the fallback pick
 /// in `platform_url` is the same on every launch.
 #[derive(Debug, Default, Deserialize)]
@@ -107,7 +107,8 @@ pub async fn check() -> Option<UpdateInfo> {
 fn preferred_formats(os: &str) -> &'static [&'static str] {
     match os {
         "macos" => &["dmg"],
-        "windows" => &["msi", "exe", "exe_or_msi"],
+        // The installer is an .exe since 0.1.25; .msi for feeds before that.
+        "windows" => &["exe", "msi", "exe_or_msi"],
         "linux" => &["appimage", "deb"],
         _ => &[],
     }
@@ -189,7 +190,7 @@ mod tests {
                 "deb": { "url": "https://x/appscreens-linux-x86_64.deb", "sha256": "b" },
                 "appimage": { "url": "https://x/appscreens-linux-x86_64.AppImage", "sha256": "c" }
             },
-            "windows": { "msi": { "url": "https://x/appscreens-windows-setup.msi", "sha256": "d" } }
+            "windows": { "exe": { "url": "https://x/appscreens-windows-setup.exe", "sha256": "d" } }
         }
     }"#;
 
@@ -197,9 +198,16 @@ mod tests {
     fn links_straight_to_the_build_for_each_os() {
         let p = platforms(FEED);
         assert_eq!(platform_url("macos", &p), "https://x/appscreens-macos-arm64.dmg?src=updater");
-        assert_eq!(platform_url("windows", &p), "https://x/appscreens-windows-setup.msi?src=updater");
+        assert_eq!(platform_url("windows", &p), "https://x/appscreens-windows-setup.exe?src=updater");
         // AppImage wins over deb, every time.
         assert_eq!(platform_url("linux", &p), "https://x/appscreens-linux-x86_64.AppImage?src=updater");
+    }
+
+    #[test]
+    fn older_feeds_still_offer_the_msi() {
+        let p = platforms(r#"{ "version": "0.1.24", "tag": "v0.1.24",
+            "platforms": { "windows": { "msi": { "url": "https://x/a.msi" } } } }"#);
+        assert_eq!(platform_url("windows", &p), "https://x/a.msi?src=updater");
     }
 
     #[test]

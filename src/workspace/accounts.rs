@@ -174,154 +174,160 @@ fn AppleCard() -> Element {
         div { class: "card",
             h2 { "Apple" }
 
-            div { class: "settings-field",
-                label { "Signing identity" }
-                if identities.read().is_empty() {
-                    p { class: "settings-hint hint-error", "No signing identity in the keychain — create a Distribution certificate below." }
-                } else {
+            if !cfg!(target_os = "macos") {
+                p { class: "settings-hint",
+                    "Signing identities, certificates and provisioning profiles live in the macOS keychain and Xcode, so they are set up on the Mac that builds for iOS. The App Store Connect key below works here: it uploads the listing and screenshots."
+                }
+            } else {
+                div { class: "settings-field",
+                    label { "Signing identity" }
+                    if identities.read().is_empty() {
+                        p { class: "settings-hint hint-error", "No signing identity in the keychain — create a Distribution certificate below." }
+                    } else {
+                        select {
+                            class: "text-input",
+                            value: "{identity}",
+                            onchange: move |e: Event<FormData>| { settings.write().apple_identity = e.value(); save_settings(&settings()); },
+                            if identity.is_empty() {
+                                option { value: "", disabled: true, selected: true, "— choose identity —" }
+                            }
+                            for id in identities.read().iter() {
+                                option { value: "{id}", selected: *id == identity, "{id}" }
+                            }
+                        }
+                        p { class: "settings-hint", "From the keychain · shared by every project on this Mac" }
+                    }
+                }
+
+                details { class: "inline-form", open: !has_distribution,
+                    summary {
+                        if has_distribution { "Create another Distribution certificate" } else { "Create a Distribution certificate" }
+                    }
+                    if has_distribution {
+                        p { class: "settings-hint hint-error",
+                            "You already have a Distribution certificate in the keychain — choose it above. A new one is only needed if that one is lost or revoked: Apple allows very few per team, and your profiles are tied to the current one."
+                        }
+                    }
+                    p { class: "settings-hint",
+                        "Makes a new private key on this Mac, asks Apple for the certificate, installs it in the keychain and keeps a password-protected .p12 backup in your keys folder. Needs the App Store Connect key below."
+                    }
+                    div { class: "build-config-grid",
+                        div { class: "build-config-field",
+                            label { class: "build-config-label", "Your name" }
+                            input { class: "text-input", placeholder: "As on your Apple Developer account", value: "{cert_name}", oninput: move |e| cert_name.set(e.value()) }
+                        }
+                        div { class: "build-config-field",
+                            label { class: "build-config-label", "Apple ID email" }
+                            input { class: "text-input", r#type: "email", placeholder: "The Apple ID you sign in to Apple Developer with", value: "{cert_email}", oninput: move |e| cert_email.set(e.value()) }
+                        }
+                        div { class: "build-config-field",
+                            label { class: "build-config-label", ".p12 backup password" }
+                            {password_input(cert_pw, "New password, at least 8 characters")}
+                        }
+                        div { class: "build-config-field",
+                            label { class: "build-config-label", "Repeat password" }
+                            {password_input(cert_pw2, "")}
+                        }
+                    }
+                    p { class: "settings-hint",
+                        "The name and email go into the certificate request, as Apple expects. The password is new: it protects the .p12 backup, which is what you'd import on another Mac — keep it in your password manager."
+                    }
+                    if let Some(e) = cert_error() {
+                        p { class: "settings-hint hint-error", "{e}" }
+                    }
+                    div { class: "conn-test",
+                        button {
+                            class: "btn btn-sm",
+                            disabled: matches!(cert_state, JobState::Running(_)) || !asc_ok,
+                            onclick: move |_| {
+                                let (pw, pw2) = (cert_pw.peek().clone(), cert_pw2.peek().clone());
+                                if cert_name.peek().trim().is_empty() || !cert_email.peek().contains('@') {
+                                    cert_error.set(Some("Fill in your name and Apple ID email.".into()));
+                                } else if pw != pw2 {
+                                    cert_error.set(Some("The passwords don't match.".into()));
+                                } else {
+                                    cert_error.set(None);
+                                    jobs::create_distribution_certificate(ws, cert_name.peek().trim().into(), cert_email.peek().trim().into(), pw);
+                                }
+                            },
+                            "Create certificate"
+                        }
+                        div { class: "publish-status-row", {job_status_line(cert_state.clone(), if asc_ok { "" } else { "Set up the App Store Connect key first" })} }
+                    }
+                }
+
+                div { class: "settings-field",
+                    label { "Provisioning profile" }
                     select {
                         class: "text-input",
-                        value: "{identity}",
-                        onchange: move |e: Event<FormData>| { settings.write().apple_identity = e.value(); save_settings(&settings()); },
-                        if identity.is_empty() {
-                            option { value: "", disabled: true, selected: true, "— choose identity —" }
+                        value: "{p.provisioning_profile}",
+                        onchange: move |e: Event<FormData>| ws.update(|p| p.provisioning_profile = e.value()),
+                        if p.provisioning_profile.is_empty() {
+                            option { value: "", disabled: true, selected: true, "— choose profile —" }
                         }
-                        for id in identities.read().iter() {
-                            option { value: "{id}", selected: *id == identity, "{id}" }
+                        if !p.provisioning_profile.is_empty() && !sorted.iter().any(|i| i.path == p.provisioning_profile) {
+                            option { value: "{p.provisioning_profile}", selected: true, "{p.provisioning_profile}" }
                         }
-                    }
-                    p { class: "settings-hint", "From the keychain · shared by every project on this Mac" }
-                }
-            }
-
-            details { class: "inline-form", open: !has_distribution,
-                summary {
-                    if has_distribution { "Create another Distribution certificate" } else { "Create a Distribution certificate" }
-                }
-                if has_distribution {
-                    p { class: "settings-hint hint-error",
-                        "You already have a Distribution certificate in the keychain — choose it above. A new one is only needed if that one is lost or revoked: Apple allows very few per team, and your profiles are tied to the current one."
-                    }
-                }
-                p { class: "settings-hint",
-                    "Makes a new private key on this Mac, asks Apple for the certificate, installs it in the keychain and keeps a password-protected .p12 backup in your keys folder. Needs the App Store Connect key below."
-                }
-                div { class: "build-config-grid",
-                    div { class: "build-config-field",
-                        label { class: "build-config-label", "Your name" }
-                        input { class: "text-input", placeholder: "As on your Apple Developer account", value: "{cert_name}", oninput: move |e| cert_name.set(e.value()) }
-                    }
-                    div { class: "build-config-field",
-                        label { class: "build-config-label", "Apple ID email" }
-                        input { class: "text-input", r#type: "email", placeholder: "The Apple ID you sign in to Apple Developer with", value: "{cert_email}", oninput: move |e| cert_email.set(e.value()) }
-                    }
-                    div { class: "build-config-field",
-                        label { class: "build-config-label", ".p12 backup password" }
-                        {password_input(cert_pw, "New password, at least 8 characters")}
-                    }
-                    div { class: "build-config-field",
-                        label { class: "build-config-label", "Repeat password" }
-                        {password_input(cert_pw2, "")}
-                    }
-                }
-                p { class: "settings-hint",
-                    "The name and email go into the certificate request, as Apple expects. The password is new: it protects the .p12 backup, which is what you'd import on another Mac — keep it in your password manager."
-                }
-                if let Some(e) = cert_error() {
-                    p { class: "settings-hint hint-error", "{e}" }
-                }
-                div { class: "conn-test",
-                    button {
-                        class: "btn btn-sm",
-                        disabled: matches!(cert_state, JobState::Running(_)) || !asc_ok,
-                        onclick: move |_| {
-                            let (pw, pw2) = (cert_pw.peek().clone(), cert_pw2.peek().clone());
-                            if cert_name.peek().trim().is_empty() || !cert_email.peek().contains('@') {
-                                cert_error.set(Some("Fill in your name and Apple ID email.".into()));
-                            } else if pw != pw2 {
-                                cert_error.set(Some("The passwords don't match.".into()));
-                            } else {
-                                cert_error.set(None);
-                                jobs::create_distribution_certificate(ws, cert_name.peek().trim().into(), cert_email.peek().trim().into(), pw);
-                            }
-                        },
-                        "Create certificate"
-                    }
-                    div { class: "publish-status-row", {job_status_line(cert_state.clone(), if asc_ok { "" } else { "Set up the App Store Connect key first" })} }
-                }
-            }
-
-            div { class: "settings-field",
-                label { "Provisioning profile" }
-                select {
-                    class: "text-input",
-                    value: "{p.provisioning_profile}",
-                    onchange: move |e: Event<FormData>| ws.update(|p| p.provisioning_profile = e.value()),
-                    if p.provisioning_profile.is_empty() {
-                        option { value: "", disabled: true, selected: true, "— choose profile —" }
-                    }
-                    if !p.provisioning_profile.is_empty() && !sorted.iter().any(|i| i.path == p.provisioning_profile) {
-                        option { value: "{p.provisioning_profile}", selected: true, "{p.provisioning_profile}" }
-                    }
-                    for info in sorted.iter() {
-                        option {
-                            value: "{info.path}",
-                            selected: info.path == p.provisioning_profile,
-                            if info.matches_bundle(&bundle_id) {
-                                "{info.name} · {info.kind.label()} · {info.app_id}"
-                            } else {
-                                "{info.name} · {info.kind.label()} · {info.app_id} (other app)"
-                            }
-                        }
-                    }
-                }
-                div { class: "install-actions",
-                    button {
-                        class: "btn btn-sm",
-                        onclick: move |_| {
-                            spawn(async move {
-                                let Some(path) = pick_file("Add a provisioning profile", ("Provisioning profile", &["mobileprovision"])).await else {
-                                    return;
-                                };
-                                let mut state = ws.profile_job;
-                                let installed = std::fs::read(&path).map_err(|e| e.to_string()).and_then(|b| install_profile(&b));
-                                match installed.and_then(|p| read_profile(&p).map(|i| (p, i)).ok_or("Installed, but it can't be read".to_string())) {
-                                    Ok((installed, info)) => {
-                                        ws.update(|p| p.provisioning_profile = installed.to_string_lossy().to_string());
-                                        let mut refresh = ws.refresh;
-                                        refresh.with_mut(|n| *n += 1);
-                                        state.set(JobState::Ok(format!("{} installed and selected", info.name)));
-                                    }
-                                    Err(e) => state.set(JobState::Failed(e)),
+                        for info in sorted.iter() {
+                            option {
+                                value: "{info.path}",
+                                selected: info.path == p.provisioning_profile,
+                                if info.matches_bundle(&bundle_id) {
+                                    "{info.name} · {info.kind.label()} · {info.app_id}"
+                                } else {
+                                    "{info.name} · {info.kind.label()} · {info.app_id} (other app)"
                                 }
-                            });
-                        },
-                        "Add profile…"
+                            }
+                        }
                     }
-                    a { class: "btn btn-sm", href: "https://developer.apple.com/account/resources/profiles/list", target: "_blank", "Profiles on Apple Developer" }
+                    div { class: "install-actions",
+                        button {
+                            class: "btn btn-sm",
+                            onclick: move |_| {
+                                spawn(async move {
+                                    let Some(path) = pick_file("Add a provisioning profile", ("Provisioning profile", &["mobileprovision"])).await else {
+                                        return;
+                                    };
+                                    let mut state = ws.profile_job;
+                                    let installed = std::fs::read(&path).map_err(|e| e.to_string()).and_then(|b| install_profile(&b));
+                                    match installed.and_then(|p| read_profile(&p).map(|i| (p, i)).ok_or("Installed, but it can't be read".to_string())) {
+                                        Ok((installed, info)) => {
+                                            ws.update(|p| p.provisioning_profile = installed.to_string_lossy().to_string());
+                                            let mut refresh = ws.refresh;
+                                            refresh.with_mut(|n| *n += 1);
+                                            state.set(JobState::Ok(format!("{} installed and selected", info.name)));
+                                        }
+                                        Err(e) => state.set(JobState::Failed(e)),
+                                    }
+                                });
+                            },
+                            "Add profile…"
+                        }
+                        a { class: "btn btn-sm", href: "https://developer.apple.com/account/resources/profiles/list", target: "_blank", "Profiles on Apple Developer" }
+                    }
+                    p { class: "settings-hint",
+                        "Per project — profiles belong to one bundle ID. Ones matching this app are listed first. Downloaded one from Apple Developer? Add it here: it's installed for Xcode and the build too."
+                    }
                 }
-                p { class: "settings-hint",
-                    "Per project — profiles belong to one bundle ID. Ones matching this app are listed first. Downloaded one from Apple Developer? Add it here: it's installed for Xcode and the build too."
-                }
-            }
 
-            if let Some(info) = selected.as_ref() {
-                ul { class: "check-list",
-                    for c in profile_checks(info, &bundle_id, &identity) {
-                        {check_row(ws, c.ok, c.label, c.detail, None)}
+                if let Some(info) = selected.as_ref() {
+                    ul { class: "check-list",
+                        for c in profile_checks(info, &bundle_id, &identity) {
+                            {check_row(ws, c.ok, c.label, c.detail, None)}
+                        }
                     }
                 }
-            }
-            if !profile_ok {
-                div { class: "conn-test",
-                    button {
-                        class: "btn btn-sm",
-                        disabled: matches!(profile_state, JobState::Running(_)) || !asc_ok,
-                        onclick: move |_| jobs::repair_profile(ws),
-                        "Regenerate App Store profile"
-                    }
-                    div { class: "publish-status-row",
-                        {job_status_line(profile_state.clone(), "Creates a fresh profile for this app on your current certificate and selects it")}
+                if !profile_ok {
+                    div { class: "conn-test",
+                        button {
+                            class: "btn btn-sm",
+                            disabled: matches!(profile_state, JobState::Running(_)) || !asc_ok,
+                            onclick: move |_| jobs::repair_profile(ws),
+                            "Regenerate App Store profile"
+                        }
+                        div { class: "publish-status-row",
+                            {job_status_line(profile_state.clone(), "Creates a fresh profile for this app on your current certificate and selects it")}
+                        }
                     }
                 }
             }
@@ -816,7 +822,7 @@ fn UploadKeyCard() -> Element {
                 div { class: "settings-field",
                     label { "Keystore password" }
                     div { class: "settings-path-row",
-                        {password_input(password, "Checked against the keystore, then kept in the Keychain")}
+                        {password_input(password, if cfg!(windows) { "Checked against the keystore, then kept in Windows Credential Manager" } else { "Checked against the keystore, then kept in the Keychain" })}
                         button {
                             class: "btn settings-browse-btn",
                             disabled: matches!(save_state(), JobState::Running(_)),
@@ -846,7 +852,7 @@ fn UploadKeyCard() -> Element {
                                     refresh.with_mut(|n| *n += 1);
                                 });
                             },
-                            "Save to Keychain"
+                            if cfg!(windows) { "Save to Credential Manager" } else { "Save to Keychain" }
                         }
                     }
                     div { class: "publish-status-row", {job_status_line(save_state(), "")} }
@@ -859,7 +865,7 @@ fn UploadKeyCard() -> Element {
                     if has_keystore {
                         "Adds the \"{android.alias}\" key to your keystore (use its password) and exports the certificate Play Console asks for."
                     } else {
-                        "Creates the keystore in your keys folder with the \"{android.alias}\" key, keeps the password in the Keychain and exports the certificate Play Console asks for."
+                        "Creates the keystore in your keys folder with the \"{android.alias}\" key, keeps the password in {signing::password_store_name()} and exports the certificate Play Console asks for."
                     }
                 }
                 div { class: "build-config-grid",

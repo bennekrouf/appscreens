@@ -1,3 +1,6 @@
+// A release build on Windows is a GUI app: no console window behind it.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 use ab_glyph::{FontRef, PxScale};
 use dioxus::desktop::wry::http::{Response, StatusCode};
 use dioxus::desktop::wry::RequestAsyncResponder;

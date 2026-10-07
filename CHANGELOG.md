@@ -15,6 +15,36 @@ Each heading is dated on the day its tag was pushed. Releases that carried only
 build or packaging work say so rather than being hidden: the version numbers a
 user sees in the update prompt should all be accounted for.
 
+## [Unreleased]
+
+### Added
+
+- Android builds now work on Windows and Linux, not just macOS. AppScreens runs
+  the whole build itself — `dx`, then the icon, package name, version and
+  signing fixes, then Gradle — instead of a bash script, finds the Android SDK
+  where Android Studio puts it on each system, and on Windows keeps the
+  upload-key password in Windows Credential Manager.
+- The keystore password no longer gets written into the generated Gradle
+  project: Gradle reads it from the environment for the length of the build.
+
+### Changed
+
+- On Windows, AppScreens now installs from `appscreens-windows-setup.exe`
+  instead of an `.msi`. It installs for your user without administrator
+  rights, and removes an AppScreens installed from the old `.msi` first. Your
+  projects and settings are kept.
+- A build script you wrote yourself still runs as it is. On Windows that needs
+  Git for Windows' bash, and AppScreens says so if it's missing.
+- On Windows and Linux, the iOS build button and the Apple signing tools say
+  they need a Mac, instead of failing halfway. Screenshots, store text and
+  listing uploads for iOS work everywhere.
+- The Doctor's "Open Android Studio" button works on Windows and Linux too.
+
+### Fixed
+
+- Windows no longer opens a console window behind AppScreens, or one for
+  every tool it runs.
+
 ## [0.1.24] - 2026-10-07
 
 ### Added

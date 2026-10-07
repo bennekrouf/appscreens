@@ -648,34 +648,19 @@ pub(super) fn run_build(ws: Ws, script_name: String) {
             ));
         }
 
-        // 2. Run the script
-        let script_path = dir.join(&script_name);
-        if !script_path.exists() {
-            build_phase.set(BuildPhase::Error(format!(
-                "{script_name} not found in project directory"
-            )));
-            return;
-        }
-
-        build_log.write().push(format!("▶ Running {script_name}…"));
-
-        let mut cmd = std::process::Command::new("bash");
-        cmd.arg(&script_path).current_dir(&dir).env("CI", "1");
+        // 2. Everything the build needs from the environment: the project's
+        //    .env, the upload key (team settings + password store) and Java.
         let env = load_env(&[dir.join(".env"), dir.join("fastlane").join(".env")]);
-        for (k, v) in &env {
-            cmd.env(k, v);
-        }
-        // Fill in the upload key from the team settings and the Keychain
-        // when the .env doesn't set it.
+        let mut child_env: Vec<(String, String)> = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         let (signing, password) = resolve_android_signing(&dir, &keystore_setting, &alias);
-        if let (false, Some(ks)) = (env.contains_key("ANDROID_KEYSTORE_PATH"), signing.keystore) {
-            cmd.env("ANDROID_KEYSTORE_PATH", ks);
+        if let (false, Some(ks)) = (env.contains_key("ANDROID_KEYSTORE_PATH"), signing.keystore.clone()) {
+            child_env.push(("ANDROID_KEYSTORE_PATH".into(), ks.to_string_lossy().to_string()));
         }
         if !env.contains_key("ANDROID_KEY_ALIAS") {
-            cmd.env("ANDROID_KEY_ALIAS", &signing.alias);
+            child_env.push(("ANDROID_KEY_ALIAS".into(), signing.alias.clone()));
         }
         if let (false, Some(pw)) = (env.contains_key("ANDROID_KEYSTORE_PASSWORD"), password) {
-            cmd.env("ANDROID_KEYSTORE_PASSWORD", pw);
+            child_env.push(("ANDROID_KEYSTORE_PASSWORD".into(), pw));
         }
         // Gradle needs a JDK it can run on: the one picked in the Java card,
         // else the project's JAVA_HOME, else the best installed — never one
@@ -695,9 +680,56 @@ pub(super) fn run_build(ws: Ws, script_name: String) {
             let path = env.get("PATH").map(Into::into).or_else(|| std::env::var_os("PATH")).unwrap_or_default();
             let path = std::env::join_paths(std::iter::once(j.home.join("bin")).chain(std::env::split_paths(&path)))
                 .unwrap_or(path);
-            cmd.env("JAVA_HOME", &j.home).env("PATH", path);
+            child_env.push(("JAVA_HOME".into(), j.home.to_string_lossy().to_string()));
+            child_env.push(("PATH".into(), path.to_string_lossy().to_string()));
         }
-        match stream_command(cmd, &script_name, build_log).await {
+
+        // 3. Android builds AppScreens owns run in AppScreens itself, the same
+        //    on every OS. A script the developer wrote runs as it is.
+        let script_path = dir.join(&script_name);
+        let own_script = script_path.exists() && !created.contains(&script_name);
+        let result = match android_build::Kind::from_script(&script_name).filter(|_| !own_script) {
+            Some(kind) => {
+                let find = |key: &str| child_env.iter().rev().find(|(k, _)| k == key).map(|(_, v)| v.clone());
+                let job = android_build::Job {
+                    kind,
+                    app_name: app_name.clone(),
+                    slug: project_slug.clone(),
+                    package: android_bundle_id.clone(),
+                    version_name: version.clone(),
+                    version_code: android_version_code,
+                    keystore: find("ANDROID_KEYSTORE_PATH").map(|v| signing::expand_home(&v)),
+                    alias: find("ANDROID_KEY_ALIAS").unwrap_or_default(),
+                    env: child_env.clone(),
+                };
+                android_build::run(dir.clone(), job, build_log).await.map(|_| ())
+            }
+            None => {
+                if !script_path.exists() {
+                    build_phase.set(BuildPhase::Error(format!("{script_name} not found in project directory")));
+                    return;
+                }
+                if script_name.contains("ios") && !cfg!(target_os = "macos") {
+                    build_phase.set(BuildPhase::Error("iOS builds need a Mac with Xcode.".into()));
+                    return;
+                }
+                let Some(bash) = find_bash() else {
+                    build_phase.set(BuildPhase::Error(format!(
+                        "{script_name} is a bash script and this computer has no bash. Install Git for Windows \
+                         (https://git-scm.com/download/win), or delete the script to let AppScreens build Android itself."
+                    )));
+                    return;
+                };
+                build_log.write().push(format!("▶ Running {script_name}…"));
+                let mut cmd = std::process::Command::new(bash);
+                cmd.arg(&script_path).current_dir(&dir).env("CI", "1");
+                for (k, v) in &child_env {
+                    cmd.env(k, v);
+                }
+                stream_command(cmd, &script_name, build_log).await
+            }
+        };
+        match result {
             Ok(()) => {
                 build_phase.set(BuildPhase::Success(script_name.clone()));
                 // The number is now taken in the store's eyes; the next
@@ -1177,6 +1209,21 @@ pub(super) fn generate_manual(ws: Ws) {
     });
 }
 
+/// bash for a developer's own build script: on Windows, Git for Windows'.
+fn find_bash() -> Option<PathBuf> {
+    if !cfg!(windows) {
+        return Some(PathBuf::from("bash"));
+    }
+    ["ProgramFiles", "ProgramW6432", "LOCALAPPDATA"]
+        .iter()
+        .filter_map(std::env::var_os)
+        .flat_map(|base| {
+            let base = PathBuf::from(base);
+            [base.join("Git").join("bin").join("bash.exe"), base.join("Programs").join("Git").join("bin").join("bash.exe")]
+        })
+        .find(|p| p.is_file())
+}
+
 /// Run a command on a plain OS thread (Signals are !Send), streaming its
 /// stdout and stderr into `log` line by line. Lines flow back over mpsc and are
 /// pushed from this task, on the UI thread, so Dioxus re-renders live.
@@ -1196,6 +1243,7 @@ pub(super) async fn stream_command(
     let (tx, rx) = mpsc::channel::<Msg>();
     let name_for_thread = name.to_string();
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    hide_console(&mut cmd);
 
     std::thread::spawn(move || {
         let mut child = match cmd.spawn() {

@@ -51,7 +51,7 @@ const ANDROID_RUST_TARGETS: [&str; 4] =
 const IOS_RUST_TARGETS: [&str; 1] = ["aarch64-apple-ios"];
 
 fn output(cmd: &mut Command) -> Option<String> {
-    let out = cmd.output().ok()?;
+    let out = cmd.quiet().output().ok()?;
     let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     out.status.success().then_some(text)
 }
@@ -109,9 +109,7 @@ pub(super) fn target_sdk(dioxus_toml: &str) -> u32 {
 }
 
 fn android_home() -> std::path::PathBuf {
-    std::env::var("ANDROID_HOME")
-        .map(Into::into)
-        .unwrap_or_else(|_| dirs::home_dir().unwrap_or_default().join("Library/Android/sdk"))
+    android_build::sdk_home()
 }
 
 fn dir_entries(path: &Path) -> Vec<String> {
@@ -131,7 +129,8 @@ pub(super) fn run(dir: &Path, platform: &PlatformType, apple_identity: &str) -> 
     };
 
     // ── dx and the project's Dioxus version ──────────────────────────────
-    let dx = dx_from(output(Command::new("dx").arg("--version")).as_deref());
+    // The same dx the Android build runs (Cargo's own copy first).
+    let dx = dx_from(output(Command::new(android_build::dx_command()).arg("--version")).as_deref());
     let lib = std::fs::read_to_string(dir.join("Cargo.lock")).ok().and_then(|l| locked_dioxus(&l));
     items.push(match (&dx, &lib) {
         (Dx::Missing, _) => DoctorItem {
@@ -321,7 +320,26 @@ pub(super) fn apply(dir: &Path, fix: &Fix) -> Result<String, String> {
             Ok(format!("Project now uses dioxus {v} (Cargo.lock updated — commit it)"))
         }
         Fix::AndroidStudio => {
-            done(Command::new("open").args(["-a", "Android Studio"]))?;
+            let not_found = || "Android Studio not found — install it from https://developer.android.com/studio".to_string();
+            if cfg!(target_os = "macos") {
+                done(Command::new("open").args(["-a", "Android Studio"])).map_err(|_| not_found())?;
+            } else {
+                // Where its installer puts it; else on PATH (Linux tarballs, Toolbox).
+                let installed: Vec<std::path::PathBuf> = if cfg!(windows) {
+                    ["ProgramFiles", "LOCALAPPDATA"]
+                        .iter()
+                        .filter_map(std::env::var_os)
+                        .flat_map(|b| {
+                            let b = std::path::PathBuf::from(b);
+                            [b.join(r"Android\Android Studio\bin\studio64.exe"), b.join(r"Programs\Android Studio\bin\studio64.exe")]
+                        })
+                        .collect()
+                } else {
+                    vec!["/opt/android-studio/bin/studio.sh".into(), "/snap/bin/android-studio".into()]
+                };
+                let studio = installed.into_iter().find(|p| p.is_file()).unwrap_or_else(|| "android-studio".into());
+                Command::new(studio).quiet().spawn().map_err(|_| not_found())?;
+            }
             Ok("Android Studio opened — use More Actions → SDK Manager".into())
         }
         Fix::DioxusToml => {

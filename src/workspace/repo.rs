@@ -2,6 +2,7 @@
 
 use std::path::Path;
 use std::process::Command;
+use super::Quiet;
 
 #[derive(Clone, PartialEq, Debug, Default)]
 pub(super) struct RepoState {
@@ -44,7 +45,7 @@ impl RepoState {
 }
 
 fn git(dir: &Path, args: &[&str]) -> Option<String> {
-    let out = Command::new("git").arg("-C").arg(dir).args(args).output().ok()?;
+    let out = Command::new("git").quiet().arg("-C").arg(dir).args(args).output().ok()?;
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 

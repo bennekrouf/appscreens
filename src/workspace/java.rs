@@ -8,6 +8,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use super::Quiet;
 use std::sync::RwLock;
 
 #[derive(Clone, PartialEq, Debug)]
@@ -137,7 +138,7 @@ pub(crate) fn probe(home: &Path, source: &'static str) -> Option<Jdk> {
     if !java_exe(home).is_file() || !keytool.is_file() {
         return None;
     }
-    let out = Command::new(java_exe(home)).arg("-version").output().ok()?;
+    let out = Command::new(java_exe(home)).quiet().arg("-version").output().ok()?;
     // `java -version` writes to stderr.
     let text = format!("{}{}", String::from_utf8_lossy(&out.stderr), String::from_utf8_lossy(&out.stdout));
     let (version, major) = parse_java_version(&text)?;
@@ -228,7 +229,7 @@ fn candidates() -> Vec<(PathBuf, &'static str)> {
         }
         // JDKs registered by their installers.
         for key in [r"HKLM\SOFTWARE\JavaSoft\JDK", r"HKLM\SOFTWARE\Eclipse Adoptium\JDK"] {
-            if let Ok(out) = Command::new("reg").args(["query", key, "/s", "/v", "JavaHome"]).output() {
+            if let Ok(out) = Command::new("reg").quiet().args(["query", key, "/s", "/v", "JavaHome"]).output() {
                 for line in String::from_utf8_lossy(&out.stdout).lines() {
                     if let Some((_, v)) = line.split_once("REG_SZ") {
                         c.push((v.trim().into(), "Registry"));
@@ -473,7 +474,7 @@ pub(crate) fn detect_installers() -> Installers {
             .into_iter()
             .find(|(_, p)| Path::new(p).is_file())
             .map(|(n, _)| n),
-        winget: cfg!(windows) && Command::new("winget").arg("--version").output().is_ok_and(|o| o.status.success()),
+        winget: cfg!(windows) && Command::new("winget").quiet().arg("--version").output().is_ok_and(|o| o.status.success()),
         android_studio: installed().iter().any(|j| j.source == "Android Studio"),
     }
 }

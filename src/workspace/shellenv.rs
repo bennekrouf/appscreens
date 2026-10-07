@@ -9,6 +9,7 @@
 use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use std::process::Command;
+use super::Quiet;
 
 const BEGIN: &str = "# >>> AppScreens JAVA_HOME >>>";
 const END: &str = "# <<< AppScreens JAVA_HOME <<<";
@@ -203,6 +204,7 @@ pub(crate) fn prove(target: &Target, gradle_dir: Option<&Path>) -> Vec<(String, 
             std::process::Command::new(shell).args(["-l", "-i", "-c", &script]).stdin(std::process::Stdio::null()).output()
         }
         Target::WindowsUser => std::process::Command::new("cmd")
+            .quiet()
             .args(["/c", "echo JAVA_HOME=%JAVA_HOME% & java -version 2>&1"])
             .output(),
     };
@@ -239,7 +241,7 @@ fn summarize_proof(text: &str, gradle: bool) -> Vec<(String, String)> {
 
 #[cfg(windows)]
 fn powershell(script: &str) -> Result<String, String> {
-    let out = Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-Command", script]).output().map_err(|e| e.to_string())?;
+    let out = Command::new("powershell").quiet().args(["-NoProfile", "-NonInteractive", "-Command", script]).output().map_err(|e| e.to_string())?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     } else {
