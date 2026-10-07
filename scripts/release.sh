@@ -2,7 +2,7 @@
 # release.sh — cut an AppScreens release locally or just bump the patch.
 #
 # After pushing the tag, GitHub Actions (release.yml) automatically:
-#   1. Builds Linux (.deb / .AppImage) and Windows (.msi) via `dx bundle`
+#   1. Builds macOS (.dmg), Linux (.deb / .AppImage) and Windows (Inno Setup .exe)
 #   2. Creates the GitHub Release with all artifacts attached
 #   3. Publishes latest.json (used by mayorana.ch download page)
 #

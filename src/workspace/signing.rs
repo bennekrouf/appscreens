@@ -29,7 +29,7 @@ pub(super) fn expand_home(path: &str) -> PathBuf {
 }
 
 fn run(cmd: &mut Command) -> Result<String, String> {
-    let out = cmd.output().map_err(|e| e.to_string())?;
+    let out = cmd.quiet().output().map_err(|e| e.to_string())?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).to_string())
     } else {
@@ -65,6 +65,26 @@ pub(super) fn keystore_account(keystore: &Path) -> String {
     format!("android-keystore:{}", keystore.display())
 }
 
+/// What the password store is called on this OS, for messages.
+pub(super) fn password_store_name() -> &'static str {
+    if cfg!(windows) {
+        "Windows Credential Manager"
+    } else {
+        "the Keychain"
+    }
+}
+
+/// Whether this OS has a password store AppScreens can use.
+pub(super) fn has_password_store() -> bool {
+    cfg!(target_os = "macos") || cfg!(windows)
+}
+
+#[cfg(windows)]
+pub(super) fn keychain_get(account: &str) -> Option<String> {
+    keyring::Entry::new(KEYCHAIN_SERVICE, account).ok()?.get_password().ok().filter(|s| !s.is_empty())
+}
+
+#[cfg(not(windows))]
 pub(super) fn keychain_get(account: &str) -> Option<String> {
     if !cfg!(target_os = "macos") {
         return None;
@@ -75,11 +95,20 @@ pub(super) fn keychain_get(account: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-/// Store (or replace) a secret. Fed to `security -i` on stdin so it never
-/// appears in the process list.
+/// Store (or replace) a secret in Windows Credential Manager.
+#[cfg(windows)]
+pub(super) fn keychain_set(account: &str, secret: &str) -> Result<(), String> {
+    keyring::Entry::new(KEYCHAIN_SERVICE, account)
+        .and_then(|e| e.set_password(secret))
+        .map_err(|e| format!("Windows Credential Manager refused the password: {e}"))
+}
+
+/// Store (or replace) a secret in the Keychain. Fed to `security -i` on
+/// stdin so it never appears in the process list.
+#[cfg(not(windows))]
 pub(super) fn keychain_set(account: &str, secret: &str) -> Result<(), String> {
     if !cfg!(target_os = "macos") {
-        return Err("The Keychain is only available on macOS — use the project's .env instead.".into());
+        return Err("This system has no password store AppScreens can use — put the password in the project's .env instead.".into());
     }
     let quote = |s: &str| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""));
     let mut child = Command::new("security")

@@ -19,15 +19,8 @@ icon = ["assets/icon.png"]
 [bundle.linux]
 # .deb / .AppImage produced by cargo-bundle via `dx bundle`
 
-[bundle.windows]
-# Uses assets/favicon.ico as the app icon on Windows
-# Set WIX_PATH in CI if you need a custom WiX toolset
-
-[bundle.windows.wix]
-# Shows the licence as a page the user accepts before installing. WiX reads it
-# as RTF; scripts/license_rtf.py writes it from LICENSE, and release CI reruns
-# it before bundling so the page always matches.
-license = "installer/LICENSE.rtf"
+# Windows isn't bundled by dx: release CI builds appscreens.exe with cargo and
+# packages it with Inno Setup (installer/installer.iss), like ais-monitor.
 
 [mobile]
 title = "AppScreens"

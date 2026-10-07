@@ -32,6 +32,15 @@ getrandom = "0.3"
 rfd = "0.15"
 dark-light = "1"
 
+[target.'cfg(windows)'.dependencies]
+# Windows' own password store (Credential Manager) for the upload-key
+# password, where macOS uses the Keychain.
+keyring = { version = "3", features = ["windows-native"] }
+
+[target.'cfg(windows)'.build-dependencies]
+# Embeds the icon and version details into appscreens.exe (see build.rs).
+winresource = "0.1"
+
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"
 ndk-context = "0.1"

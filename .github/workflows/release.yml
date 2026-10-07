@@ -310,11 +310,8 @@ jobs:
             target
           key: release-windows-cargo-${{ hashFiles('Cargo.lock') }}
 
-      - name: Install dioxus-cli
-        run: cargo install dioxus-cli --version 0.7.10 --locked  # keep in step with the dioxus version in Cargo.toml
-
       # ── Windows code signing ───────────────────────────────────────────────
-      # Unconfigured repos still build; the .msi just ships unsigned and
+      # Unconfigured repos still build; the installer just ships unsigned and
       # SmartScreen warns on download. Set all six secrets to enable.
       - name: Check Windows signing secrets
         id: winsign
@@ -335,25 +332,43 @@ jobs:
             Write-Host "All Windows signing secrets present."
           } elseif ($missing.Count -eq $names.Count) {
             "have=false" | Out-File -Append $env:GITHUB_OUTPUT
-            Write-Host "::warning::No Windows signing secrets configured — the .msi will ship unsigned and SmartScreen will warn on download."
+            Write-Host "::warning::No Windows signing secrets configured — the installer will ship unsigned and SmartScreen will warn on download."
           } else {
             Write-Host "::error::Incomplete Windows signing configuration. Missing: $($missing -join ', ')"
             Write-Host "Set all six, or none at all to skip signing."
             exit 1
           }
 
-      # `dx bundle` compiles and packages in one shot, which leaves no seam to
-      # sign the executable before it goes into the .msi. Building first gives
-      # us that seam: cargo fingerprints its inputs, not its outputs, so the
-      # bundle step below reuses this binary instead of rebuilding, and the
-      # signature survives into the installer.
-      - name: Pre-build binary
+      # The icon embedded in the .exe and used by the installer, made from the
+      # same PNG as the other platforms (ImageMagick ships on windows-latest).
+      - name: Generate Windows .ico
+        shell: pwsh
+        run: |
+          if (Test-Path assets/icon.png) {
+            magick assets/icon.png -define icon:auto-resize=16,24,32,48,64,128,256 assets/icon.ico
+          } else {
+            Write-Host "::warning::assets/icon.png not found — the .exe will ship without an icon."
+          }
+
+      - name: Build
         env:
           # Where anonymous usage statistics go (repository variable, not a
           # secret). Unset, the build sends nothing and never asks.
           MAYORANA_TELEMETRY_URL: ${{ vars.MAYORANA_TELEMETRY_URL }}
         run: cargo build --release
 
+      # Only produced when the WebView2 loader is linked dynamically; the
+      # installer skips it otherwise.
+      - name: Copy WebView2Loader.dll
+        shell: pwsh
+        run: |
+          $dll = Get-ChildItem "target\release\build\webview2-com-sys-*\out\x64\WebView2Loader.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($dll) { Copy-Item $dll.FullName "target\release\WebView2Loader.dll" -Force; Write-Host "Copied $($dll.FullName)" }
+          else { Write-Host "No WebView2Loader.dll — the loader is linked statically." }
+
+      # The binary is signed before it goes into the installer: Inno Setup
+      # embeds whatever .exe it finds, and an unsigned binary inside a signed
+      # installer still upsets SmartScreen and enterprise policies.
       - name: Sign application binary
         if: steps.winsign.outputs.have == 'true'
         uses: azure/trusted-signing-action@v0
@@ -370,28 +385,25 @@ jobs:
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
 
-      # The licence page in the .msi (Dioxus.toml → bundle.windows.wix.license)
-      # comes from LICENSE, converted to the RTF that WiX reads.
-      - name: Write the installer's licence page
-        run: python scripts/license_rtf.py
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
 
-      - name: Bundle
-        run: dx bundle --platform desktop --release --package-types msi
-
-      - name: Collect unsigned .msi
+      - name: Build installer
         shell: pwsh
         run: |
+          $iscc = @(
+            "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+            "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { Write-Error "ISCC.exe not found"; exit 1 }
+          $version = "${{ needs.prepare.outputs.tag || github.ref_name }}".TrimStart("v")
           New-Item -ItemType Directory -Path dist -Force | Out-Null
-          $msi = Get-ChildItem -Path target -Recurse -Filter *.msi |
-            Where-Object { $_.FullName -match "bundle" } |
-            Select-Object -First 1
-          if (-not $msi) { Write-Error "No .msi produced by dx bundle"; exit 1 }
-          Copy-Item $msi.FullName dist\appscreens-windows-setup.msi
+          & $iscc /DMyAppVersion=$version installer\installer.iss
+          if (-not (Test-Path dist\appscreens-windows-setup.exe)) { Write-Error "Installer not produced"; exit 1 }
           Get-ChildItem dist
 
       # Signing provider: Azure Trusted Signing, the same certificate the other
-      # repos use. SignPath Foundation is the free alternative for open-source
-      # projects, but it requires an established user base.
+      # repos use.
       - name: Sign installer
         if: steps.winsign.outputs.have == 'true'
         uses: azure/trusted-signing-action@v0
@@ -403,7 +415,7 @@ jobs:
           trusted-signing-account-name: ${{ secrets.TRUSTED_SIGNING_ACCOUNT }}
           certificate-profile-name:     ${{ secrets.TRUSTED_SIGNING_CERT_PROFILE }}
           files-folder: dist
-          files-folder-filter: msi
+          files-folder-filter: exe
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
@@ -462,7 +474,7 @@ jobs:
           MAC_DMG="appscreens-macos-arm64.dmg"
           LINUX_DEB="appscreens-linux-x86_64.deb"
           LINUX_APPIMAGE="appscreens-linux-x86_64.AppImage"
-          WIN_MSI="appscreens-windows-setup.msi"
+          WIN_EXE="appscreens-windows-setup.exe"
 
           sha() { [ -n "$1" ] && [ -f "release/$1" ] && sha256sum "release/$1" | awk '{print $1}' || echo ""; }
 
@@ -481,7 +493,7 @@ jobs:
                 "appimage": { "url": "$BASE/$LINUX_APPIMAGE", "sha256": "$(sha "$LINUX_APPIMAGE")" }
               },
               "windows": {
-                "msi": { "url": "$BASE/$WIN_MSI", "sha256": "$(sha "$WIN_MSI")" }
+                "exe": { "url": "$BASE/$WIN_EXE", "sha256": "$(sha "$WIN_EXE")" }
               }
             }
           }
@@ -631,9 +643,10 @@ jobs:
               if appimage:
                   out += [f"- **Other distros**: download {appimage}, `chmod +x` it, and run"]
               out += [""]
-          if (msi := link("windows", "msi")):
+          if (exe := link("windows", "exe")):
               out += ["### Windows",
-                      f"Download {msi} and run it. Windows SmartScreen may warn — click *More info → Run anyway* (the binary is unsigned).", ""]
+                      f"Download {exe} and run it — it installs for your user, no administrator rights needed. "
+                      "An AppScreens installed from an older .msi is removed first; your projects and settings are kept.", ""]
           out += ["## For mayorana.ch",
                   "`latest.json` is attached to this release with download URLs and SHA-256 hashes.",
                   "Stable link: https://mayorana.ch/downloads/appscreens/latest/latest.json"]

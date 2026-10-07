@@ -10,6 +10,7 @@ use super::*;
 use std::time::SystemTime;
 
 mod accounts;
+mod android_build;
 mod asckey;
 mod checks;
 mod consistency;
@@ -198,6 +199,31 @@ impl Creds {
     }
 }
 
+/// A GUI app on Windows opens a console window for every program it starts,
+/// unless told not to.
+pub(super) fn hide_console(cmd: &mut std::process::Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    let _ = cmd;
+}
+
+/// `Command::new(…).quiet()`: no console window on Windows.
+pub(super) trait Quiet {
+    fn quiet(&mut self) -> &mut Self;
+}
+
+impl Quiet for std::process::Command {
+    fn quiet(&mut self) -> &mut Self {
+        hide_console(self);
+        self
+    }
+}
+
 /// Lookup order shared by every job: project `.env`, then `fastlane/.env`,
 /// then the process environment.
 fn env_lookup(dir: &std::path::Path) -> impl Fn(&str) -> Option<String> {
@@ -270,8 +296,9 @@ impl AndroidSigning {
             label: "Keystore password",
             ok: self.password.is_some(),
             detail: match self.password {
-                Some(PasswordSource::Keychain) => "In the Keychain".into(),
-                Some(PasswordSource::Env) => "In the project's .env — the Keychain is safer".into(),
+                Some(PasswordSource::Keychain) => format!("In {}", signing::password_store_name()),
+                Some(PasswordSource::Env) if signing::has_password_store() => format!("In the project's .env — {} is safer", signing::password_store_name()),
+                Some(PasswordSource::Env) => "In the project's .env".into(),
                 None => "Not saved yet".into(),
             },
         };
