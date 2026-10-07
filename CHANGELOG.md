@@ -15,6 +15,14 @@ Each heading is dated on the day its tag was pushed. Releases that carried only
 build or packaging work say so rather than being hidden: the version numbers a
 user sees in the update prompt should all be accounted for.
 
+## [Unreleased]
+
+### Added
+
+- The Windows installer now includes a license page that users must accept
+  before installing the application. This ensures that users are aware of the
+  licensing terms before proceeding with the installation.
+
 ## [0.1.23] - 2026-10-06
 
 ### Added
