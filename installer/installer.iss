@@ -1,15 +1,15 @@
-; AppScreens — Windows installer (Inno Setup)
+; ShipScreen — Windows installer (Inno Setup)
 ; Build: iscc /DMyAppVersion=X.Y.Z installer\installer.iss
-; Output: dist\appscreens-windows-setup.exe
+; Output: dist\shipscreen-windows-setup.exe
 
 #ifndef MyAppVersion
   #define MyAppVersion "0.1.0"
 #endif
 
-#define MyAppName      "AppScreens"
+#define MyAppName      "ShipScreen"
 #define MyAppPublisher "Mayorana"
-#define MyAppURL       "https://mayorana.ch/en/apps/appscreens"
-#define MyAppExeName   "appscreens.exe"
+#define MyAppURL       "https://mayorana.ch/en/apps/shipscreen"
+#define MyAppExeName   "shipscreen.exe"
 ; Must never change: Windows recognises upgrades of this app by it.
 #define MyAppId        "88D3E921-9260-472D-AE4E-434F430C5186"
 
@@ -21,7 +21,7 @@ AppVerName={#MyAppName} {#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
-AppUpdatesURL=https://mayorana.ch/en/apps/appscreens/releases
+AppUpdatesURL=https://mayorana.ch/en/apps/shipscreen/releases
 VersionInfoVersion={#MyAppVersion}
 VersionInfoProductVersion={#MyAppVersion}
 VersionInfoProductName={#MyAppName}
@@ -32,12 +32,12 @@ DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 OutputDir=..\dist
 ; No version in the name, so the "latest" download link never changes.
-OutputBaseFilename=appscreens-windows-setup
+OutputBaseFilename=shipscreen-windows-setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 ; Per-user by default: no UAC prompt, works on locked-down machines. IT can
-; still install for everyone with:  appscreens-windows-setup.exe /ALLUSERS /VERYSILENT
+; still install for everyone with:  shipscreen-windows-setup.exe /ALLUSERS /VERYSILENT
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=commandline
 ArchitecturesAllowed=x64compatible
@@ -88,7 +88,7 @@ const
 
 { Versions up to 0.1.24 were .msi packages. Find that install, if any, by
   its name in Programs and Features, so it can be removed first — otherwise
-  the user ends up with two AppScreens. }
+  the user ends up with two ShipScreen. }
 function FindMsiInstall(RootKey: Integer; var ProductCode: String): Boolean;
 var
   Keys: TArrayOfString;
@@ -127,7 +127,7 @@ begin
     Found := FindMsiInstall(HKLM32, ProductCode);
   if not Found then
     Exit;
-  if MsgBox('An older AppScreens (installed from an .msi) is on this computer.' + #13#10 + #13#10 +
+  if MsgBox('An older ShipScreen (installed from an .msi) is on this computer.' + #13#10 + #13#10 +
             'It will be removed first. Your projects and settings are kept.' + #13#10 + #13#10 +
             'Continue?', mbConfirmation, MB_YESNO) = IDNO then
   begin
@@ -157,7 +157,7 @@ begin
     Exit;
   Installed := GetInstalledVersion();
   if (Installed <> '') and (Installed = '{#MyAppVersion}') then
-    Result := MsgBox('AppScreens {#MyAppVersion} is already installed.' + #13#10 + #13#10 +
+    Result := MsgBox('ShipScreen {#MyAppVersion} is already installed.' + #13#10 + #13#10 +
                      'Install it again?', mbConfirmation, MB_YESNO) = IDYES;
   { A newer or older version is simply replaced in place: same AppId, same folder. }
 end;

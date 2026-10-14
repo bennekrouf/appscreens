@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 /// of version number. Updated automatically every release.
 /// Served from mayorana.ch alongside the builds it describes, so update
 /// checks do not depend on the source repository staying publicly readable.
-const LATEST_URL: &str = "https://mayorana.ch/downloads/appscreens/latest/latest.json";
+const LATEST_URL: &str = "https://mayorana.ch/downloads/shipscreen/latest/latest.json";
 
 /// Fallback when `latest.json` has no build for this OS (e.g. an Intel Mac —
 /// only Apple Silicon is built): the page listing every build, instead of a
@@ -27,7 +27,7 @@ const RELEASES_URL: &str = "https://mayorana.ch/en/apps";
 /// Sent on the update check so the download logs can tell an existing user
 /// updating from a new install, and which versions are still in use. Read by
 /// scripts/downloads-stats.py on mayorana.ch.
-const USER_AGENT: &str = concat!("appscreens/", env!("CARGO_PKG_VERSION"), " (updater)");
+const USER_AGENT: &str = concat!("shipscreen/", env!("CARGO_PKG_VERSION"), " (updater)");
 
 #[derive(Debug, Deserialize)]
 struct LatestJson {
@@ -185,22 +185,22 @@ mod tests {
     const FEED: &str = r#"{
         "version": "0.1.14", "tag": "v0.1.14",
         "platforms": {
-            "macos": { "dmg": { "url": "https://x/appscreens-macos-arm64.dmg", "sha256": "a" } },
+            "macos": { "dmg": { "url": "https://x/shipscreen-macos-arm64.dmg", "sha256": "a" } },
             "linux": {
-                "deb": { "url": "https://x/appscreens-linux-x86_64.deb", "sha256": "b" },
-                "appimage": { "url": "https://x/appscreens-linux-x86_64.AppImage", "sha256": "c" }
+                "deb": { "url": "https://x/shipscreen-linux-x86_64.deb", "sha256": "b" },
+                "appimage": { "url": "https://x/shipscreen-linux-x86_64.AppImage", "sha256": "c" }
             },
-            "windows": { "exe": { "url": "https://x/appscreens-windows-setup.exe", "sha256": "d" } }
+            "windows": { "exe": { "url": "https://x/shipscreen-windows-setup.exe", "sha256": "d" } }
         }
     }"#;
 
     #[test]
     fn links_straight_to_the_build_for_each_os() {
         let p = platforms(FEED);
-        assert_eq!(platform_url("macos", &p), "https://x/appscreens-macos-arm64.dmg?src=updater");
-        assert_eq!(platform_url("windows", &p), "https://x/appscreens-windows-setup.exe?src=updater");
+        assert_eq!(platform_url("macos", &p), "https://x/shipscreen-macos-arm64.dmg?src=updater");
+        assert_eq!(platform_url("windows", &p), "https://x/shipscreen-windows-setup.exe?src=updater");
         // AppImage wins over deb, every time.
-        assert_eq!(platform_url("linux", &p), "https://x/appscreens-linux-x86_64.AppImage?src=updater");
+        assert_eq!(platform_url("linux", &p), "https://x/shipscreen-linux-x86_64.AppImage?src=updater");
     }
 
     #[test]

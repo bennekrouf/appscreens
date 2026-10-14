@@ -209,7 +209,7 @@ let q = "/data/user/0/com.other.app/files/db";
 
     #[test]
     fn fixes_mismatches_in_code_and_env() {
-        let dir = std::env::temp_dir().join("appscreens-test-consistency");
+        let dir = std::env::temp_dir().join("shipscreen-test-consistency");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(

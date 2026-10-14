@@ -52,7 +52,7 @@ use std::time::Duration;
 
 /// The product name the statistics are filed under, matching its folder
 /// under mayorana.ch/downloads/.
-const APP: &str = "appscreens";
+const APP: &str = "shipscreen";
 const SCHEMA: u32 = 1;
 
 /// Where batches go. Baked in by the release workflow; absent in a development
@@ -379,7 +379,10 @@ fn dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
         .join("mayorana")
         .join("telemetry")
-        .join(APP)
+        // AppScreens, the app's name before ShipScreen: the folder holds the
+        // install's identity and the person's answer, and a new folder would
+        // forget a "turn it off".
+        .join("appscreens")
 }
 
 /// Write to a temporary file in the same directory, then rename it into place.

@@ -70,7 +70,7 @@ mod tests {
 
     #[test]
     fn reports_unsafe_repositories() {
-        let dir = std::env::temp_dir().join("appscreens-test-repo");
+        let dir = std::env::temp_dir().join("shipscreen-test-repo");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         assert!(!repo_state(&dir).is_git);

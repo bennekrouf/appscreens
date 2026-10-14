@@ -446,9 +446,9 @@ fn AscKeySetup() -> Element {
                     ". The first time, the Account Holder has to click Request Access."
                 }
                 li {
-                    "Click + to generate a key. Name it AppScreens. Access: Admin lets AppScreens also create certificates and profiles; App Manager is enough for uploads and review."
+                    "Click + to generate a key. Name it ShipScreen. Access: Admin lets ShipScreen also create certificates and profiles; App Manager is enough for uploads and review."
                 }
-                li { "Download the key right away — Apple lets you download it only once. AppScreens keeps a copy in your keys folder." }
+                li { "Download the key right away — Apple lets you download it only once. ShipScreen keeps a copy in your keys folder." }
                 li { "The Issuer ID is shown above the list of keys on the same page." }
             }
             div { class: "build-config-grid",
@@ -637,7 +637,7 @@ fn PlayKeySetup() -> Element {
                 li {
                     "Open "
                     a { href: playkey::ACCOUNTS_PAGE, target: "_blank", "Service accounts" }
-                    ", create one (no roles needed), then Keys → Add key → Create new key → JSON. The file downloads once; AppScreens keeps a copy in your keys folder."
+                    ", create one (no roles needed), then Keys → Add key → Create new key → JSON. The file downloads once; ShipScreen keeps a copy in your keys folder."
                 }
                 li {
                     "In "
@@ -1054,7 +1054,7 @@ fn BackupCard() -> Element {
                         let sources = backup_sources(&settings.peek());
                         let (mut pw, mut pw2) = (pw, pw2);
                         spawn(async move {
-                            let name = format!("appscreens-keys-{}.enc", &utc_now()[..10]);
+                            let name = format!("shipscreen-keys-{}.enc", &utc_now()[..10]);
                             let Some(dest) = save_file("Save encrypted backup", &name).await else { return };
                             state.set(JobState::Running("Encrypting…".into()));
                             let dest2 = dest.clone();

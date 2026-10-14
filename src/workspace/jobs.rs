@@ -643,7 +643,7 @@ pub(super) fn run_build(ws: Ws, script_name: String) {
         }
         if !created.contains(&script_name) && dir.join(&script_name).exists() {
             build_log.write().push(format!(
-                "📌 Using your own {script_name} as it is — AppScreens only rewrites scripts it wrote. \
+                "📌 Using your own {script_name} as it is — ShipScreen only rewrites scripts it wrote. \
                  Its version and build number come from the script, not the Version step."
             ));
         }
@@ -684,7 +684,7 @@ pub(super) fn run_build(ws: Ws, script_name: String) {
             child_env.push(("PATH".into(), path.to_string_lossy().to_string()));
         }
 
-        // 3. Android builds AppScreens owns run in AppScreens itself, the same
+        // 3. Android builds ShipScreen owns run in ShipScreen itself, the same
         //    on every OS. A script the developer wrote runs as it is.
         let script_path = dir.join(&script_name);
         let own_script = script_path.exists() && !created.contains(&script_name);
@@ -716,7 +716,7 @@ pub(super) fn run_build(ws: Ws, script_name: String) {
                 let Some(bash) = find_bash() else {
                     build_phase.set(BuildPhase::Error(format!(
                         "{script_name} is a bash script and this computer has no bash. Install Git for Windows \
-                         (https://git-scm.com/download/win), or delete the script to let AppScreens build Android itself."
+                         (https://git-scm.com/download/win), or delete the script to let ShipScreen build Android itself."
                     )));
                     return;
                 };
@@ -1450,7 +1450,7 @@ pub(super) fn upload_ipa(ws: Ws) {
 
             // altool only finds keys named AuthKey_<id>.p8 in a known folder;
             // hand it a private temporary one rather than touching ~/.
-            let keys_dir = std::env::temp_dir().join(format!("appscreens-keys-{}", std::process::id()));
+            let keys_dir = std::env::temp_dir().join(format!("shipscreen-keys-{}", std::process::id()));
             std::fs::create_dir_all(&keys_dir).map_err(|e| e.to_string())?;
             let key_copy = keys_dir.join(format!("AuthKey_{key_id}.p8"));
             std::fs::copy(&key_path, &key_copy).map_err(|e| format!("Cannot read .p8 key at {key_path}: {e}"))?;

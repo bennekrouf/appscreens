@@ -1,10 +1,10 @@
 # Changelog
 
-What changed in each release of **AppScreens**, the desktop app for making
+What changed in each release of **ShipScreen**, the desktop app for making
 app-store screenshots, publishing them and building your app.
 
 The public version of this page — with the download for each release — lives at
-<https://mayorana.ch/en/apps/appscreens/releases>. It is generated from this
+<https://mayorana.ch/en/apps/shipscreen/releases>. It is generated from this
 file by `scripts/changelog_to_json.py`, so this file is the only place a
 release note is written.
 
@@ -15,11 +15,22 @@ Each heading is dated on the day its tag was pushed. Releases that carried only
 build or packaging work say so rather than being hidden: the version numbers a
 user sees in the update prompt should all be accounted for.
 
+## [Unreleased]
+
+### Changed
+
+- AppScreens is now called ShipScreen. Your projects, saved passwords, signing
+  keys and Java setup carry over. A project's `appscreens.json` is still read
+  and kept where it is; new projects get a `shipscreen.json`. Build scripts
+  AppScreens wrote are still recognised as ShipScreen's own and kept up to
+  date. On macOS the update installs as ShipScreen.app; once it runs, you can
+  delete AppScreens.app from Applications.
+
 ## [0.1.25] - 2026-10-07
 
 ### Added
 
-- Android builds now work on Windows and Linux, not just macOS. AppScreens runs
+- Android builds now work on Windows and Linux, not just macOS. ShipScreen runs
   the whole build itself — `dx`, then the icon, package name, version and
   signing fixes, then Gradle — instead of a bash script, finds the Android SDK
   where Android Studio puts it on each system, and on Windows keeps the
@@ -29,12 +40,12 @@ user sees in the update prompt should all be accounted for.
 
 ### Changed
 
-- On Windows, AppScreens now installs from `appscreens-windows-setup.exe`
+- On Windows, ShipScreen now installs from `shipscreen-windows-setup.exe`
   instead of an `.msi`. It installs for your user without administrator
-  rights, and removes an AppScreens installed from the old `.msi` first. Your
+  rights, and removes an ShipScreen installed from the old `.msi` first. Your
   projects and settings are kept.
 - A build script you wrote yourself still runs as it is. On Windows that needs
-  Git for Windows' bash, and AppScreens says so if it's missing.
+  Git for Windows' bash, and ShipScreen says so if it's missing.
 - On Windows and Linux, the iOS build button and the Apple signing tools say
   they need a Mac, instead of failing halfway. Screenshots, store text and
   listing uploads for iOS work everywhere.
@@ -42,7 +53,7 @@ user sees in the update prompt should all be accounted for.
 
 ### Fixed
 
-- Windows no longer opens a console window behind AppScreens, or one for
+- Windows no longer opens a console window behind ShipScreen, or one for
   every tool it runs.
 
 ## [0.1.24] - 2026-10-07
@@ -57,7 +68,7 @@ user sees in the update prompt should all be accounted for.
 
 ### Added
 
-- AppScreens now shares anonymous usage statistics: whether it is installed and
+- ShipScreen now shares anonymous usage statistics: whether it is installed and
   opened, its version and your operating system. It is on by default; a note at
   the bottom of the window tells you once, and nothing is sent before you have
   seen it. **Turn off** there stops it for good and deletes anything not yet
@@ -81,7 +92,7 @@ user sees in the update prompt should all be accounted for.
 
 ### Fixed
 
-- Opened from the Dock or Finder, AppScreens no longer reports "dx not found"
+- Opened from the Dock or Finder, ShipScreen no longer reports "dx not found"
   or missing Rust targets when the Dioxus CLI and rustup are installed. It now
   finds the tools in your Rust install folder and your terminal's settings,
   and the build scripts it runs find them too.
@@ -140,7 +151,7 @@ user sees in the update prompt should all be accounted for.
 
 ### Fixed
 
-- AppScreens no longer replaces a build script you wrote yourself. It used to
+- ShipScreen no longer replaces a build script you wrote yourself. It used to
   rewrite every build script from its template before each build, losing
   changes like a display name or a minimum iOS version. Scripts it wrote are
   still kept up to date.
@@ -191,10 +202,10 @@ user sees in the update prompt should all be accounted for.
 - The Build step shows every Java installed on the machine — Android Studio's,
   Homebrew, SDKMAN, system installs, and on Windows the registry — marks the
   ones too old or too new for the Gradle version your project builds with,
-  and lets you pick which one AppScreens uses. Your terminal and system
+  and lets you pick which one ShipScreen uses. Your terminal and system
   settings are left alone, so there is no JAVA_HOME to set up by hand.
 - When no suitable Java is installed, the Java card offers to install one that
-  fits your project: Homebrew (inside AppScreens, no password) or the Temurin
+  fits your project: Homebrew (inside ShipScreen, no password) or the Temurin
   installer on macOS, your package manager in a terminal on Linux, winget on
   Windows — and picks it up as soon as it's done.
 - Android builds no longer start on a Java the project's Gradle can't run on.
@@ -214,7 +225,7 @@ user sees in the update prompt should all be accounted for.
 ### Fixed
 
 - Signing and Android builds no longer fail with "Unable to locate a Java
-  Runtime" when AppScreens is started from the Dock or a terminal without Java
+  Runtime" when ShipScreen is started from the Dock or a terminal without Java
   on its path. It now finds a Java installation by itself — `JAVA_HOME`,
   macOS's registered Java, Android Studio's bundled runtime or Homebrew — and
   hands it to the build.
@@ -281,7 +292,7 @@ user sees in the update prompt should all be accounted for.
 ### Fixed
 
 - Android screenshots are saved inside the project, one set per language, in
-  fastlane's folder layout. They used to land wherever AppScreens was started
+  fastlane's folder layout. They used to land wherever ShipScreen was started
   from, and each language overwrote the one before, so every language got the
   same images on Google Play.
 - Google Play gets a single feature graphic per language, taken from the first
@@ -365,7 +376,7 @@ user sees in the update prompt should all be accounted for.
 
 - Downloads and update checks now come from mayorana.ch instead of GitHub. The
   update banner links to the download page there.
-- AppScreens is source-available under the PolyForm Noncommercial licence:
+- ShipScreen is source-available under the PolyForm Noncommercial licence:
   free for personal, educational and noncommercial use.
 
 ## [0.1.4] - 2026-08-27
@@ -378,7 +389,7 @@ user sees in the update prompt should all be accounted for.
 
 ### Added
 
-- AppScreens runs on Android, picking images through the system file picker.
+- ShipScreen runs on Android, picking images through the system file picker.
 - A banner when a newer version is available.
 - A light and dark theme toggle, following the system theme until you choose.
 - A new app icon.

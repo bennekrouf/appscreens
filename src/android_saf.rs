@@ -3,7 +3,7 @@
 //! `rfd` has no Android backend at all — SAF only ever hands out opaque
 //! `content://` URIs, never a filesystem path, so rfd's "pick a path" model
 //! has nowhere to attach on this platform. This hand-rolls the one thing
-//! AppScreens actually needs from it: picking one or more images and
+//! ShipScreen actually needs from it: picking one or more images and
 //! reading their bytes, via JNI, so the caller can copy them into the
 //! project's own directory (see `app_private_projects_root`) and never touch
 //! a `content://` URI again afterward.

@@ -1,5 +1,5 @@
 [application]
-name = "AppScreens"
+name = "ShipScreen"
 default_platform = "desktop"
 # Subclasses WryActivity to override onActivityResult — needed so the
 # Storage Access Framework picker (src/android_saf.rs) can receive the
@@ -13,21 +13,21 @@ publisher = "Mayorana"
 copyright = "Copyright (c) 2026 Mayorana"
 category = "DeveloperTool"
 short_description = "Generate App Store and Play Store screenshots."
-long_description = "AppScreens generates marketing screenshots for the App Store and Google Play from a single source image."
+long_description = "ShipScreen generates marketing screenshots for the App Store and Google Play from a single source image."
 icon = ["assets/icon.png"]
 
 [bundle.linux]
 # .deb / .AppImage produced by cargo-bundle via `dx bundle`
 
-# Windows isn't bundled by dx: release CI builds appscreens.exe with cargo and
+# Windows isn't bundled by dx: release CI builds shipscreen.exe with cargo and
 # packages it with Inno Setup (installer/installer.iss), like ais-monitor.
 
 [mobile]
-title = "AppScreens"
+title = "ShipScreen"
 bundle_identifier = "com.mayorana.appscreens"
 
 [android]
 min_sdk_version = 24
 
 [web.app]
-title = "AppScreens"
+title = "ShipScreen"

@@ -22,8 +22,8 @@ fn main() {
         }
         let mut res = winresource::WindowsResource::new();
         res.set_icon("assets/icon.ico");
-        res.set("FileDescription", "AppScreens");
-        res.set("ProductName", "AppScreens");
+        res.set("FileDescription", "ShipScreen");
+        res.set("ProductName", "ShipScreen");
         res.set("CompanyName", "Mayorana");
         res.set("LegalCopyright", "© 2026 Mayorana");
         if let Err(e) = res.compile() {

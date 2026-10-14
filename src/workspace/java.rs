@@ -1,7 +1,7 @@
-//! Which Java AppScreens hands to keytool and Gradle.
+//! Which Java ShipScreen hands to keytool and Gradle.
 //!
 //! Setting JAVA_HOME system-wide is different — and fragile — on every OS,
-//! so AppScreens doesn't rely on it: it finds every JDK installed, checks each
+//! so ShipScreen doesn't rely on it: it finds every JDK installed, checks each
 //! against the Gradle version the project builds with, and uses the chosen
 //! (or recommended) one for the commands it runs itself. The developer's
 //! shell and system stay as they are.
@@ -272,7 +272,7 @@ pub(crate) fn refresh() {
 }
 
 // ---------------------------------------------------------------------------
-// The JDK AppScreens uses
+// The JDK ShipScreen uses
 // ---------------------------------------------------------------------------
 
 static PREFERRED: RwLock<Option<PathBuf>> = RwLock::new(None);
@@ -285,7 +285,7 @@ pub(crate) fn set_preferred(home: &str) {
     }
 }
 
-/// The JDK to use: the one chosen in AppScreens if it still exists, else the
+/// The JDK to use: the one chosen in ShipScreen if it still exists, else the
 /// recommended one for the default Gradle, else any.
 pub(crate) fn selected() -> Option<Jdk> {
     let jdks = installed();
@@ -330,7 +330,7 @@ pub(crate) fn pick_for_build(
             true
         }
     };
-    if let Some(j) = chosen.filter(|j| skip(j, "The Java picked in AppScreens:")) {
+    if let Some(j) = chosen.filter(|j| skip(j, "The Java picked in ShipScreen:")) {
         return (Some(j), notes);
     }
     if let Some(j) = env.filter(|j| skip(j, "JAVA_HOME:")) {
@@ -339,7 +339,7 @@ pub(crate) fn pick_for_build(
     (fallback.or_else(|| installed.first().cloned()), notes)
 }
 
-/// Java for everything AppScreens runs in `project` (Doctor, builds).
+/// Java for everything ShipScreen runs in `project` (Doctor, builds).
 pub(crate) fn for_project(project: &Path, env_java_home: Option<&str>) -> (Option<Jdk>, Vec<String>) {
     let (gradle, _) = project_gradle(project);
     let env = env_java_home.filter(|h| !h.is_empty()).and_then(|h| probe(Path::new(h), "JAVA_HOME"));
@@ -433,7 +433,7 @@ pub(crate) fn remedy(installed: &[Jdk], gradle: (u32, u32), issue: &BuildJavaIss
 
 #[derive(Clone, PartialEq, Debug)]
 pub(crate) enum Runner {
-    /// Runs inside AppScreens with a live log (no password needed)
+    /// Runs inside ShipScreen with a live log (no password needed)
     InApp { program: PathBuf, args: Vec<String> },
     /// Needs a password prompt, so it opens in a terminal window
     Terminal,

@@ -1,6 +1,6 @@
-//! Opt-in: make the developer's own terminal use the same Java as AppScreens.
+//! Opt-in: make the developer's own terminal use the same Java as ShipScreen.
 //!
-//! AppScreens doesn't need this — it passes Java to the commands it runs.
+//! ShipScreen doesn't need this — it passes Java to the commands it runs.
 //! It's for everything else (running Gradle by hand, other tools). The change
 //! is a marked block at the end of the shell profile (or user environment
 //! variables on Windows), shown before it's written, backed up, and removed
@@ -11,6 +11,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use super::Quiet;
 
+// The app was AppScreens when it first wrote these. They are on developers'
+// machines now — in shell profiles, a fish conf.d file, a backup's name and a
+// Windows user variable — and are how it finds its own block again, so they
+// keep that name: a new one would add a second JAVA_HOME block beside the first.
 const BEGIN: &str = "# >>> AppScreens JAVA_HOME >>>";
 const END: &str = "# <<< AppScreens JAVA_HOME <<<";
 
@@ -57,7 +61,7 @@ pub(crate) fn detect_target() -> Target {
     }
 }
 
-/// The lines AppScreens adds.
+/// The lines ShipScreen adds.
 pub(crate) fn block(flavor: Flavor, java_home: &Path) -> String {
     let home = java_home.display().to_string().replace('"', "\\\"");
     match flavor {
@@ -66,7 +70,7 @@ pub(crate) fn block(flavor: Flavor, java_home: &Path) -> String {
     }
 }
 
-/// `text` without AppScreens' block (and without the blank line before it).
+/// `text` without ShipScreen' block (and without the blank line before it).
 pub(crate) fn remove_block(text: &str) -> String {
     let mut out: Vec<&str> = Vec::new();
     let mut inside = false;
@@ -93,14 +97,14 @@ pub(crate) fn remove_block(text: &str) -> String {
     s
 }
 
-/// `text` with AppScreens' block (replacing any earlier one) at the end, so
+/// `text` with ShipScreen' block (replacing any earlier one) at the end, so
 /// it wins over settings above it.
 pub(crate) fn upsert_block(text: &str, block: &str) -> String {
     let base = remove_block(text);
     if base.trim().is_empty() { block.to_string() } else { format!("{base}\n{block}") }
 }
 
-/// The JAVA_HOME in AppScreens' block, if the block is there.
+/// The JAVA_HOME in ShipScreen' block, if the block is there.
 pub(crate) fn block_java_home(text: &str) -> Option<String> {
     let start = text.lines().position(|l| l.trim() == BEGIN)?;
     text.lines().skip(start + 1).take_while(|l| l.trim() != END).find_map(|l| {
@@ -129,7 +133,7 @@ pub(crate) fn other_java_home_lines(text: &str) -> Vec<usize> {
 
 #[derive(Clone, PartialEq, Debug, Default)]
 pub(crate) struct Status {
-    /// JAVA_HOME AppScreens set, if it did
+    /// JAVA_HOME ShipScreen set, if it did
     pub installed: Option<String>,
     /// Other places that set JAVA_HOME (profile line numbers)
     pub others: Vec<usize>,
@@ -151,7 +155,7 @@ pub(crate) fn apply(target: &Target, java_home: &Path) -> Result<String, String>
         Target::Profile { path, flavor } => {
             let old = std::fs::read_to_string(path).unwrap_or_default();
             if !old.is_empty() {
-                // One backup of the file as it was before AppScreens first touched it.
+                // One backup of the file as it was before ShipScreen first touched it.
                 let backup = path.with_file_name(format!(
                     "{}.appscreens-backup",
                     path.file_name().and_then(|n| n.to_str()).unwrap_or("profile")
@@ -258,7 +262,7 @@ fn windows_status() -> Status {
 #[cfg(windows)]
 fn windows_apply(java_home: &Path) -> Result<String, String> {
     let home = java_home.display().to_string().replace('\'', "''");
-    // APPSCREENS_JAVA_HOME records that AppScreens made the change, so Remove
+    // APPSCREENS_JAVA_HOME records that ShipScreen made the change, so Remove
     // only undoes its own.
     powershell(&format!(
         "$h='{home}'; [Environment]::SetEnvironmentVariable('JAVA_HOME',$h,'User'); \
@@ -343,7 +347,7 @@ mod tests {
 
     #[test]
     fn applies_to_a_profile_with_a_backup() {
-        let dir = std::env::temp_dir().join("appscreens-test-shellenv");
+        let dir = std::env::temp_dir().join("shipscreen-test-shellenv");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(".zshrc");
