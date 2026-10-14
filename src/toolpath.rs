@@ -1,10 +1,10 @@
-//! Find the developer's tools (`dx`, `cargo`, `rustup`) however AppScreens was opened.
+//! Find the developer's tools (`dx`, `cargo`, `rustup`) however ShipScreen was opened.
 //!
 //! Opened from the Dock or Finder, a macOS app gets only `/usr/bin:/bin:/usr/sbin:/sbin`,
 //! so nothing installed by rustup or Homebrew is found. And when Homebrew's deno is
 //! installed, its own `dx` can shadow the Dioxus CLI. At startup, before any thread
 //! exists, PATH becomes: cargo's bin folder, then the login shell's PATH, then the
-//! inherited one. Every command AppScreens runs, build scripts included, inherits it.
+//! inherited one. Every command ShipScreen runs, build scripts included, inherits it.
 
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
@@ -42,7 +42,7 @@ fn cargo_bin() -> Option<PathBuf> {
     Some(home.join("bin")).filter(|bin| bin.is_dir())
 }
 
-const MARKER: &str = "__APPSCREENS_PATH__";
+const MARKER: &str = "__SHIPSCREEN_PATH__";
 
 /// PATH as the developer's login shell sets it (reads `.zprofile`, `.bash_profile`…).
 /// `None` on Windows and Android, or if the shell fails or takes over 3 seconds.

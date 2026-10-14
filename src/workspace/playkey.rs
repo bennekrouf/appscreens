@@ -105,7 +105,7 @@ mod tests {
 
     #[test]
     fn recognises_service_account_keys_only() {
-        let dir = std::env::temp_dir().join("appscreens-test-playkey");
+        let dir = std::env::temp_dir().join("shipscreen-test-playkey");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("Downloads")).unwrap();
         let src = dir.join("Downloads/tafseel-488419-77ff.json");
@@ -127,7 +127,7 @@ mod tests {
 
     #[test]
     fn reuses_the_key_another_project_has() {
-        let root = std::env::temp_dir().join("appscreens-test-playkey-projects");
+        let root = std::env::temp_dir().join("shipscreen-test-playkey-projects");
         let _ = std::fs::remove_dir_all(&root);
         let (a, b) = (root.join("nahw"), root.join("quran"));
         std::fs::create_dir_all(&a).unwrap();

@@ -98,7 +98,7 @@ struct Settings {
     /// Where it was written
     #[serde(default)]
     last_backup_path: String,
-    /// JDK home AppScreens runs keytool and Gradle with ("" = recommended)
+    /// JDK home ShipScreen runs keytool and Gradle with ("" = recommended)
     #[serde(default)]
     java_home: String,
 }
@@ -133,6 +133,8 @@ impl Default for Settings {
 fn global_config_path() -> PathBuf {
     let dir = dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
+        // Still the old name: it lists every project, and the app was AppScreens
+        // when it was first written.
         .join("appscreens");
     let _ = std::fs::create_dir_all(&dir);
     dir.join("settings.json")
@@ -174,7 +176,7 @@ fn parse_dotenv(path: &PathBuf) -> std::collections::HashMap<String, String> {
 fn load_env(dotenv_paths: &[PathBuf]) -> std::collections::HashMap<String, String> {
     let mut merged = std::collections::HashMap::new();
 
-    // Collect candidate directories to look for an AppScreens-level .env:
+    // Collect candidate directories to look for an ShipScreen-level .env:
     //   1. current working directory  (always correct for `cargo run`)
     //   2. next to the executable     (correct for an installed/release binary)
     //   3. walk up from exe until we find a .env (handles target/debug/ nesting)
@@ -243,7 +245,7 @@ impl PlatformType {
 }
 
 // ---------------------------------------------------------------------------
-// Per-project state (saved as <project_dir>/appscreens.json)
+// Per-project state (saved as <project_dir>/shipscreen.json)
 // ---------------------------------------------------------------------------
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 struct ProjectState {
@@ -485,8 +487,17 @@ impl ProjectState {
     }
 }
 
+/// `shipscreen.json`, or `appscreens.json` in a project set up before the app
+/// was renamed ShipScreen. That file is kept rather than renamed: it sits in the
+/// developer's own repository, and its .gitignore names it.
 fn project_state_path(project_dir: &PathBuf) -> PathBuf {
-    project_dir.join("appscreens.json")
+    let path = project_dir.join("shipscreen.json");
+    let legacy = project_dir.join("appscreens.json");
+    if !path.exists() && legacy.exists() {
+        legacy
+    } else {
+        path
+    }
 }
 
 fn load_project_state(project_dir: &PathBuf) -> ProjectState {
@@ -511,11 +522,11 @@ fn save_project_state(project_dir: &PathBuf, state: &ProjectState) {
     match serde_json::to_string_pretty(state) {
         Ok(json) => {
             if let Err(e) = std::fs::write(project_state_path(project_dir), &json) {
-                eprintln!("[AppScreens] ⚠️  Failed to save project state to {:?}: {e}", project_state_path(project_dir));
+                eprintln!("[ShipScreen] ⚠️  Failed to save project state to {:?}: {e}", project_state_path(project_dir));
             }
         }
         Err(e) => {
-            eprintln!("[AppScreens] ⚠️  Failed to serialize project state: {e}");
+            eprintln!("[ShipScreen] ⚠️  Failed to serialize project state: {e}");
         }
     }
 }
@@ -621,7 +632,7 @@ if [ -f "$ICON_SOURCE" ]; then
   echo "   Converted to true PNG."
 
   # Build asset catalog in temp dir
-  CATALOG_DIR="/tmp/appscreens_icons_$$"
+  CATALOG_DIR="/tmp/shipscreen_icons_$$"
   ICON_SET="$CATALOG_DIR/Assets.xcassets/AppIcon.appiconset"
   mkdir -p "$ICON_SET"
 
@@ -710,7 +721,7 @@ sed -i '' '/^$/d' "$PLIST_PATH"
 plutil -replace CFBundleIdentifier -string "$BUNDLE_ID" "$PLIST_PATH"
 plutil -replace CFBundleDisplayName -string "{app_name}" "$PLIST_PATH"
 
-# Build Number — owned by AppScreens (Version step), injected per build
+# Build Number — owned by ShipScreen (Version step), injected per build
 BUILD_NUMBER="{build_number}"
 echo "   Version {short_version} ($BUILD_NUMBER)"
 
@@ -761,7 +772,7 @@ plutil -replace DTCompiler -string "com.apple.compilers.llvm.clang.1_0" "$PLIST_
 # 6. Embed Provisioning Profile
 # Priority order:
 #   1. ~/Downloads/<AppName>.mobileprovision  (project-specific, freshly downloaded)
-#   2. AppScreens global profile selection
+#   2. ShipScreen global profile selection
 #   3. embedded.mobileprovision in project root
 #   4. Any .mobileprovision in project root
 GLOBAL_PROFILE="{profile_path}"
@@ -868,7 +879,7 @@ set -e
 
 PROJECT_NAME="{project_slug}"
 
-# Signing — AppScreens passes these in from Accounts → Android upload key
+# Signing — ShipScreen passes these in from Accounts → Android upload key
 # (password from the Keychain); run by hand, set them in the project's .env:
 #   ANDROID_KEYSTORE_PATH       upload keystore (.jks / .keystore)
 #   ANDROID_KEYSTORE_PASSWORD   its password
@@ -907,7 +918,7 @@ fi
 # 0b. Check signing
 if [ -z "$KEYSTORE_PATH" ] || [ -z "$KEY_PASS" ]; then
     echo "❌ Android signing is not set up."
-    echo "   In AppScreens: Accounts → Android upload key (the password stays in the Keychain)."
+    echo "   In ShipScreen: Accounts → Android upload key (the password stays in the Keychain)."
     echo "   Running this script by hand? Add to the project's .env:"
     echo "   ANDROID_KEYSTORE_PATH=/path/to/upload-keystore.jks"
     echo "   ANDROID_KEYSTORE_PASSWORD=<its password>"
@@ -957,7 +968,7 @@ BUILD_GRADLE="$BUILD_DIR/app/build.gradle.kts"
 OLD_PACKAGE="{old_package}"
 NEW_PACKAGE="{android_package}"
 
-# Version info — owned by AppScreens (Version step), injected per build.
+# Version info — owned by ShipScreen (Version step), injected per build.
 # Mirrored into Dioxus.toml so the project's own config stays in step.
 V_CODE={version_code}
 V_NAME="{version_name}"
@@ -1211,10 +1222,16 @@ fi
 "##)
 }
 
-/// First lines of every script AppScreens writes; how it knows which ones it may replace.
-const SCRIPT_MARKER: &str = "# Written by AppScreens before each build — edits here are replaced.";
+/// First lines of every script ShipScreen writes; how it knows which ones it may replace.
+const SCRIPT_MARKER: &str = "# Written by ShipScreen before each build — edits here are replaced.";
 
-/// (Re)write AppScreens' build scripts from the latest template, so config
+/// A script this app wrote, under either name: it was AppScreens before ShipScreen,
+/// and the scripts it wrote then are still its own to replace.
+fn written_by_us(text: &str) -> bool {
+    text.contains("ShipScreen") || text.contains("AppScreens")
+}
+
+/// (Re)write ShipScreen' build scripts from the latest template, so config
 /// changes and template fixes are always picked up. Scripts the developer
 /// wrote are left alone.
 fn ensure_build_scripts(
@@ -1248,15 +1265,15 @@ fn ensure_build_scripts(
         ),
     ];
 
-    // A script AppScreens didn't write is the developer's: it may carry fixes
+    // A script ShipScreen didn't write is the developer's: it may carry fixes
     // the template doesn't have (a display name, a minimum iOS), so it's used
-    // as-is, never replaced. Older AppScreens scripts are recognised by name.
+    // as-is, never replaced. Older ShipScreen scripts are recognised by name.
     let read = |name: &str| std::fs::read_to_string(project_dir.join(name)).ok();
-    let generated_here = scripts.iter().any(|(n, _)| read(n).is_some_and(|t| t.contains("AppScreens")));
+    let generated_here = scripts.iter().any(|(n, _)| read(n).is_some_and(|t| written_by_us(&t)));
     let ours = |name: &str| match read(name) {
         None => true,
         Some(text) => {
-            text.contains("AppScreens")
+            written_by_us(&text)
                 || (generated_here && matches!(name, "build_android.sh" | "build_apk.sh"))
         }
     };
@@ -1282,7 +1299,7 @@ fn ensure_build_scripts(
 }
 
 // ---------------------------------------------------------------------------
-// Scaffold a brand-new Dioxus project from AppScreens (no pre-run scaffolder needed)
+// Scaffold a brand-new Dioxus project from ShipScreen (no pre-run scaffolder needed)
 // ---------------------------------------------------------------------------
 
 /// Create the minimal Rust/Dioxus project structure for a new app.
@@ -1339,7 +1356,7 @@ fn scaffold_new_project(
         .map_err(|e| format!("Cannot write src/main.rs: {e}"))?;
 
     // ── .gitignore ────────────────────────────────────────────────────────────
-    let gitignore = "/target\nappscreens.json\n.env\n";
+    let gitignore = "/target\nshipscreen.json\n.env\n";
     // Only create if not already present
     let gi_path = dir.join(".gitignore");
     if !gi_path.exists() {
@@ -1411,7 +1428,7 @@ enum AndroidPublishPhase {
 // ---------------------------------------------------------------------------
 fn main() {
     tracing_subscriber::fmt::init();
-    // Before any thread starts: PATH is read by every command AppScreens runs.
+    // Before any thread starts: PATH is read by every command ShipScreen runs.
     toolpath::init();
 
     let config = dioxus::desktop::Config::new()
@@ -1428,7 +1445,7 @@ fn main() {
         ))
         .with_window(
             WindowBuilder::new()
-                .with_title("AppScreens")
+                .with_title("ShipScreen")
                 .with_window_icon(make_icon())
                 .with_inner_size(LogicalSize::new(1020.0, 860.0))
                 .with_focused(true)
@@ -1454,7 +1471,7 @@ fn make_icon() -> Option<dioxus::desktop::tao::window::Icon> {
             let radius = SIZE as f32 / 2.0;
             let alpha = if r_sq > (radius * radius) { 0u8 } else { 255u8 };
 
-            // Gradient: top-left blue → bottom-right purple (AppScreens identity)
+            // Gradient: top-left blue → bottom-right purple (ShipScreen identity)
             let t = (x + y) as f32 / (SIZE * 2) as f32;
             let r = (0.0_f32 + t * 120.0) as u8;
             let g = (120.0 - t * 60.0) as u8;
@@ -1698,7 +1715,7 @@ fn App() -> Element {
         if let (Some(info), false) = (update_info.read().clone(), *update_dismissed.read()) {
             div { class: "update-banner",
                 span { class: "update-banner-text",
-                    "AppScreens "
+                    "ShipScreen "
                     strong { "{info.latest_version}" }
                     " is available (you have {env!(\"CARGO_PKG_VERSION\")})."
                 }
@@ -1727,7 +1744,7 @@ fn App() -> Element {
         if *ask_consent.read() {
             div { class: "consent-banner",
                 span { class: "update-banner-text",
-                    strong { "AppScreens shares anonymous usage statistics. " }
+                    strong { "ShipScreen shares anonymous usage statistics. " }
                     "Whether it is installed and opened, and its version and operating system \
                      — never your files, data, accounts or anything you type."
                 }
@@ -1930,7 +1947,7 @@ fn ProjectPicker(on_open: EventHandler<PathBuf>) -> Element {
                         alt: "",
                     }
                     div {
-                        h1 { "AppScreens" }
+                        h1 { "ShipScreen" }
                         p { class: "picker-subtitle", "App Store & Play Store screenshot generator" }
                     }
                 }
@@ -2063,7 +2080,7 @@ fn ProjectPicker(on_open: EventHandler<PathBuf>) -> Element {
                                     let project_dir = parent_dir.join(&slug_val);
                                     match scaffold_new_project(&project_dir, &name_val, &slug_val, &bundle_val, &plat_val) {
                                         Ok(()) => {
-                                            // Pre-populate appscreens.json with the config so
+                                            // Pre-populate shipscreen.json with the config so
                                             // ProjectView opens with all fields filled in.
                                             let mut state = ProjectState::with_defaults();
                                             state.app_name          = name_val;

@@ -1,10 +1,10 @@
-# AppScreens
+# ShipScreen
 
 ## Release notes
 
-Every change a user of AppScreens could notice gets a note in `CHANGELOG.md`, in
+Every change a user of ShipScreen could notice gets a note in `CHANGELOG.md`, in
 the same PR as the change. The notes are published as-is at
-<https://mayorana.ch/en/apps/appscreens/releases> and in the GitHub Release body.
+<https://mayorana.ch/en/apps/shipscreen/releases> and in the GitHub Release body.
 
 - Add bullets under `## [Unreleased]`, grouped under `### Added`, `### Changed`,
   `### Fixed` or `### Removed`. If there is no `[Unreleased]` heading, create

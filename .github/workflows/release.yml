@@ -197,13 +197,13 @@ jobs:
           cp -R "$APP" dmg-staging/
           ln -s /Applications dmg-staging/Applications
           hdiutil create \
-            -volname "AppScreens" \
+            -volname "ShipScreen" \
             -srcfolder dmg-staging \
             -ov -format UDZO \
-            dist/appscreens-macos-arm64.dmg
+            dist/shipscreen-macos-arm64.dmg
           codesign --force --timestamp \
             --sign "$SIGNING_IDENTITY" \
-            dist/appscreens-macos-arm64.dmg
+            dist/shipscreen-macos-arm64.dmg
 
       - name: Notarize and staple
         run: |
@@ -211,18 +211,18 @@ jobs:
           P8="$RUNNER_TEMP/AuthKey_${APP_STORE_KEY_ID}.p8"
           echo "$APP_STORE_KEY" | base64 --decode > "$P8"
 
-          xcrun notarytool submit dist/appscreens-macos-arm64.dmg \
+          xcrun notarytool submit dist/shipscreen-macos-arm64.dmg \
             --key "$P8" \
             --key-id "$APP_STORE_KEY_ID" \
             --issuer "$APP_STORE_ISSUER_ID" \
             --wait
-          xcrun stapler staple dist/appscreens-macos-arm64.dmg
-          xcrun stapler validate dist/appscreens-macos-arm64.dmg
+          xcrun stapler staple dist/shipscreen-macos-arm64.dmg
+          xcrun stapler validate dist/shipscreen-macos-arm64.dmg
 
       - name: Hashes
         run: |
           cd dist
-          shasum -a 256 appscreens-macos-arm64.dmg > SHA256SUMS-macos.txt
+          shasum -a 256 shipscreen-macos-arm64.dmg > SHA256SUMS-macos.txt
           ls -lh
 
       - name: Clean up keychain
@@ -233,7 +233,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: appscreens-macos
+          name: shipscreen-macos
           path: dist/*
 
   build-linux:
@@ -279,15 +279,15 @@ jobs:
           mkdir -p dist
           DEB=$(find target -type f -name "*.deb" | head -1)
           APPIMAGE=$(find target -type f -name "*.AppImage" | head -1)
-          [ -n "$DEB" ]      && cp "$DEB"      dist/appscreens-linux-x86_64.deb
-          [ -n "$APPIMAGE" ] && cp "$APPIMAGE" dist/appscreens-linux-x86_64.AppImage
+          [ -n "$DEB" ]      && cp "$DEB"      dist/shipscreen-linux-x86_64.deb
+          [ -n "$APPIMAGE" ] && cp "$APPIMAGE" dist/shipscreen-linux-x86_64.AppImage
           ls -lh dist/
           (cd dist && sha256sum * > SHA256SUMS-linux.txt)
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: appscreens-linux
+          name: shipscreen-linux
           path: dist/*
 
   build-windows:
@@ -399,7 +399,7 @@ jobs:
           $version = "${{ needs.prepare.outputs.tag || github.ref_name }}".TrimStart("v")
           New-Item -ItemType Directory -Path dist -Force | Out-Null
           & $iscc /DMyAppVersion=$version installer\installer.iss
-          if (-not (Test-Path dist\appscreens-windows-setup.exe)) { Write-Error "Installer not produced"; exit 1 }
+          if (-not (Test-Path dist\shipscreen-windows-setup.exe)) { Write-Error "Installer not produced"; exit 1 }
           Get-ChildItem dist
 
       # Signing provider: Azure Trusted Signing, the same certificate the other
@@ -435,7 +435,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: appscreens-windows
+          name: shipscreen-windows
           path: dist/*
 
   release:
@@ -468,19 +468,19 @@ jobs:
           # Versioned, immutable URLs — the same paths the publish step below
           # rsyncs to. Override with the DOWNLOAD_BASE_URL repo variable if the
           # download host ever moves.
-          BASE="${DL_BASE:-https://mayorana.ch/downloads/appscreens}"
+          BASE="${DL_BASE:-https://mayorana.ch/downloads/shipscreen}"
           BASE="${BASE%/}/$TAG"
 
-          MAC_DMG="appscreens-macos-arm64.dmg"
-          LINUX_DEB="appscreens-linux-x86_64.deb"
-          LINUX_APPIMAGE="appscreens-linux-x86_64.AppImage"
-          WIN_EXE="appscreens-windows-setup.exe"
+          MAC_DMG="shipscreen-macos-arm64.dmg"
+          LINUX_DEB="shipscreen-linux-x86_64.deb"
+          LINUX_APPIMAGE="shipscreen-linux-x86_64.AppImage"
+          WIN_EXE="shipscreen-windows-setup.exe"
 
           sha() { [ -n "$1" ] && [ -f "release/$1" ] && sha256sum "release/$1" | awk '{print $1}' || echo ""; }
 
           cat > release/latest.json <<EOF
           {
-            "name": "AppScreens",
+            "name": "ShipScreen",
             "version": "$VER",
             "tag": "$TAG",
             "released_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -502,7 +502,7 @@ jobs:
 
       # ── Release notes feed ─────────────────────────────────────────────────
       # CHANGELOG.md is the only place a release note is written. This turns it
-      # into the feed the website renders at /apps/appscreens/releases, and ships
+      # into the feed the website renders at /apps/shipscreen/releases, and ships
       # it beside the builds rather than on the source host, for the same reason
       # latest.json lives there.
       #
@@ -526,23 +526,23 @@ jobs:
                  --date "$(date -u +%Y-%m-%d)" \
                  > release/releases.json; then
             echo "::warning::Could not build releases.json from CHANGELOG.md — keeping the published feed."
-            curl -fsS "https://mayorana.ch/downloads/appscreens/latest/releases.json" \
+            curl -fsS "https://mayorana.ch/downloads/shipscreen/latest/releases.json" \
                  -o release/releases.json \
-              || echo '{"name":"appscreens","releases":[]}' > release/releases.json
+              || echo '{"name":"shipscreen","releases":[]}' > release/releases.json
           fi
           python3 -c "import json; d=json.load(open('release/releases.json')); print(len(d['releases']), 'releases, newest', d['releases'][0]['version'] if d['releases'] else 'none')"
 
       # ── Publish the signed artifacts to mayorana.ch ────────────────────────
       # The binaries are the product and no longer ride on the public GitHub
       # Release. nginx on the VPS serves them straight off disk from
-      #   /var/www/mayorana-downloads/appscreens/{<tag>,latest}/
+      #   /var/www/mayorana-downloads/shipscreen/{<tag>,latest}/
       #
       # `latest/` is synced with --delete so it always matches exactly this
       # release: when a platform fails to build, its download 404s instead of
       # quietly serving the previous version under this version's checksum.
       #
       # No mkdir over ssh: the deploy key is confined with rrsync and gets no
-      # shell. rsync creates the final path component, and <root>/appscreens
+      # shell. rsync creates the final path component, and <root>/shipscreen
       # already exists on the server.
       #
       # Unset secrets = skip with a warning, so a fork or an unconfigured
@@ -576,7 +576,7 @@ jobs:
             exit 1
           fi
 
-          ROOT="${DEST_ROOT:-}/appscreens"
+          ROOT="${DEST_ROOT:-}/shipscreen"
 
           install -m 700 -d ~/.ssh
           trap 'rm -f ~/.ssh/dist_key' EXIT
@@ -618,7 +618,7 @@ jobs:
           if [ -n "$CHANGES" ]; then
             printf "## What's new in %s\n\n%s\n\n" "$TAG" "$CHANGES" >> notes.md
           fi
-          printf '%s\n\n' "Every version, with its notes: **[mayorana.ch/en/apps/appscreens/releases](https://mayorana.ch/en/apps/appscreens/releases)**" >> notes.md
+          printf '%s\n\n' "Every version, with its notes: **[mayorana.ch/en/apps/shipscreen/releases](https://mayorana.ch/en/apps/shipscreen/releases)**" >> notes.md
 
           # Download links, taken from this release's latest.json. The builds
           # live on mayorana.ch, not on this page, and builds before 0.1.15
@@ -633,7 +633,7 @@ jobs:
           out = ["## Download", ""]
           if (dmg := link("macos", "dmg")):
               out += ["### macOS (Apple Silicon)",
-                      f"Download {dmg}, open it, and drag AppScreens to /Applications.",
+                      f"Download {dmg}, open it, and drag ShipScreen to /Applications.",
                       "Signed with Apple Developer ID and notarized — opens with a normal double-click.", ""]
           deb, appimage = link("linux", "deb"), link("linux", "appimage")
           if deb or appimage:
@@ -646,15 +646,15 @@ jobs:
           if (exe := link("windows", "exe")):
               out += ["### Windows",
                       f"Download {exe} and run it — it installs for your user, no administrator rights needed. "
-                      "An AppScreens installed from an older .msi is removed first; your projects and settings are kept.", ""]
+                      "An ShipScreen installed from an older .msi is removed first; your projects and settings are kept.", ""]
           out += ["## For mayorana.ch",
                   "`latest.json` is attached to this release with download URLs and SHA-256 hashes.",
-                  "Stable link: https://mayorana.ch/downloads/appscreens/latest/latest.json"]
+                  "Stable link: https://mayorana.ch/downloads/shipscreen/latest/latest.json"]
           print("\n".join(out))
           PY
 
           gh release create "$TAG" \
-            --title "AppScreens $TAG" \
+            --title "ShipScreen $TAG" \
             --notes-file notes.md \
             release/latest.json \
             release/releases.json

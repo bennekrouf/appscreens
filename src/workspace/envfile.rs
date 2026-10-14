@@ -102,7 +102,7 @@ mod tests {
 
     #[test]
     fn writes_where_the_key_already_lives_and_ignores_env_in_git() {
-        let dir = std::env::temp_dir().join("appscreens-test-envfile");
+        let dir = std::env::temp_dir().join("shipscreen-test-envfile");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("fastlane")).unwrap();
         std::fs::write(dir.join("fastlane/.env"), "APP_STORE_CONNECT_API_KEY_ISSUER_ID=old\n").unwrap();

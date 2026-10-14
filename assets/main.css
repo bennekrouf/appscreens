@@ -1,7 +1,7 @@
 /* ══════════════════════════════════════════════
    DESIGN TOKENS — dark (default) / light
 
-   Mood: cool indigo. AppScreens exists to show an app at its best in the
+   Mood: cool indigo. ShipScreen exists to show an app at its best in the
    store, so the chrome stays quiet and lets the generated screenshots carry
    the colour. The accents are the two stops of the app icon's own gradient —
    #0078D4 blue for anything that builds or confirms, #783CC0 violet for
@@ -159,7 +159,7 @@ body {
     color: var(--text1);
     margin: 0;
     padding: 0;
-    /* Normal page flow — body scrolls when content overflows. AppScreens'
+    /* Normal page flow — body scrolls when content overflows. ShipScreen'
        picker / project views use `min-height: 100vh`, not a fixed viewport. */
     overflow-y: auto;
     overflow-x: hidden;

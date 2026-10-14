@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# release.sh — cut an AppScreens release locally or just bump the patch.
+# release.sh — cut an ShipScreen release locally or just bump the patch.
 #
 # After pushing the tag, GitHub Actions (release.yml) automatically:
 #   1. Builds macOS (.dmg), Linux (.deb / .AppImage) and Windows (Inno Setup .exe)

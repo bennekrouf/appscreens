@@ -81,7 +81,7 @@ pub(super) fn verify_aab(
 /// Checks for the newest IPA: identifiers, version, signer and profile.
 pub(super) fn verify_ipa(ipa: &Path, bundle_id: &str) -> Vec<CredCheck> {
     let mut checks = Vec::new();
-    let tmp = std::env::temp_dir().join(format!("appscreens-ipa-check-{}", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("shipscreen-ipa-check-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
     let unzipped = Command::new("unzip").args(["-q", "-o"]).arg(ipa).arg("-d").arg(&tmp).status().is_ok_and(|s| s.success());
     let app = std::fs::read_dir(tmp.join("Payload"))
@@ -160,7 +160,7 @@ mod tests {
         if signing::java_home().is_none() {
             return; // no JDK
         }
-        let dir = std::env::temp_dir().join("appscreens-test-verify");
+        let dir = std::env::temp_dir().join("shipscreen-test-verify");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let ks = dir.join("k.jks");

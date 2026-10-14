@@ -1,4 +1,4 @@
-# AppScreens
+# ShipScreen
 
 Make app-store screenshots, publish them, and build your app — from one
 desktop app. Built with 🦀 Rust + [Dioxus](https://dioxuslabs.com) 0.7.
@@ -20,7 +20,7 @@ while you move between steps.
   wizard (app name, slug, bundle ID, platform).
 - Platforms: **iOS**, **Android**, **iOS + Android** or **Desktop**.
 - Up to 8 recent projects are remembered.
-- Per-project settings live in `<project>/appscreens.json`: app name, slug,
+- Per-project settings live in `<project>/shipscreen.json`: app name, slug,
   iOS bundle ID, Android package, logo, colours, languages and export targets.
 
 ### Screenshot generation
@@ -29,7 +29,7 @@ while you move between steps.
   title/subtitle per image. Languages: Arabic, English, French, Hindi,
   Indonesian, Malay, Albanian, Turkish, Urdu, Chinese (Simplified).
 - **AI mode** ([fal.ai](https://fal.ai)) — describe a background style; fal.ai
-  generates a device frame with a flat grey screen, and AppScreens finds that
+  generates a device frame with a flat grey screen, and ShipScreen finds that
   area and composites your screenshot into it. Every frame in a set shares the
   same theme. The last 20 style prompts are kept.
 - **Manual mode** — title and subtitle drawn in Roboto Bold over your primary /
@@ -95,7 +95,7 @@ go backwards.
 
 ### Building
 
-AppScreens writes build scripts into the project folder
+ShipScreen writes build scripts into the project folder
 (`build_ios_distribution.sh`, `build_android_release.sh`, `build_android.sh`,
 `build_apk.sh`), injecting the version and build numbers, and runs them from
 the **Build** step with live output:
@@ -109,7 +109,7 @@ The project logo is synced to `assets/icon.png` before each build.
 ### App
 
 - **Settings** (gear icon): fal.ai key, device style, inference steps. Stored
-  in the user config directory (`appscreens/settings.json`).
+  in the user config directory (`shipscreen/settings.json`).
 - Light / dark theme, following the system theme on desktop.
 - Update check against `mayorana.ch`, with a banner when a new version is out.
 - Dismissible notices published on `mayorana.ch`.
@@ -129,7 +129,7 @@ dx serve
 ```
 
 Android requires Android Studio with the NDK and USB debugging enabled
-(package `com.mayorana.appscreens`, min SDK 24).
+(package `com.mayorana.appscreens`, kept from the app's name before ShipScreen; min SDK 24).
 
 Releases are cut with `scripts/release.sh`; the GitHub workflow builds macOS,
 Windows (MSI) and Linux (deb, AppImage) packages.

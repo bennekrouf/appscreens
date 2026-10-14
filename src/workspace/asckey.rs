@@ -130,7 +130,7 @@ mod tests {
 
     #[test]
     fn keeps_a_private_copy_in_the_keys_folder() {
-        let dir = std::env::temp_dir().join("appscreens-test-asckey");
+        let dir = std::env::temp_dir().join("shipscreen-test-asckey");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("Downloads")).unwrap();
         let src = dir.join("Downloads/AuthKey_ABCDE12345.p8");
@@ -149,7 +149,7 @@ mod tests {
 
     #[test]
     fn reuses_a_key_another_project_has() {
-        let root = std::env::temp_dir().join("appscreens-test-asckey-projects");
+        let root = std::env::temp_dir().join("shipscreen-test-asckey-projects");
         let _ = std::fs::remove_dir_all(&root);
         let (a, b) = (root.join("nahw"), root.join("quran"));
         std::fs::create_dir_all(&a).unwrap();

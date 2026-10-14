@@ -10,7 +10,7 @@
 //! no banner. Never panics, never slows startup.
 //!
 //! Served from mayorana.ch:
-//!   /downloads/appscreens/notice.json   — this product only (wins when present)
+//!   /downloads/shipscreen/notice.json   — this product only (wins when present)
 //!   /downloads/notice.json           — every product
 //!
 //! ```json
@@ -26,15 +26,15 @@
 use serde::Deserialize;
 use std::path::PathBuf;
 
-const APP: &str = "appscreens";
-const APP_NAME: &str = "AppScreens";
+const APP: &str = "shipscreen";
+const APP_NAME: &str = "ShipScreen";
 
-const APP_NOTICE_URL: &str = "https://mayorana.ch/downloads/appscreens/notice.json";
+const APP_NOTICE_URL: &str = "https://mayorana.ch/downloads/shipscreen/notice.json";
 const GLOBAL_NOTICE_URL: &str = "https://mayorana.ch/downloads/notice.json";
 
 /// Distinct from the updater's agent on purpose: the download statistics
 /// count `(updater)` polls as live installs, and this fetch is not one.
-const USER_AGENT: &str = concat!("appscreens/", env!("CARGO_PKG_VERSION"), " (notice)");
+const USER_AGENT: &str = concat!("shipscreen/", env!("CARGO_PKG_VERSION"), " (notice)");
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Notice {

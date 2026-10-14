@@ -1,5 +1,5 @@
 [package]
-name = "appscreens"
+name = "shipscreen"
 version = "0.1.25"
 edition = "2021"
 license-file = "LICENSE"
@@ -38,7 +38,7 @@ dark-light = "1"
 keyring = { version = "3", features = ["windows-native"] }
 
 [target.'cfg(windows)'.build-dependencies]
-# Embeds the icon and version details into appscreens.exe (see build.rs).
+# Embeds the icon and version details into shipscreen.exe (see build.rs).
 winresource = "0.1"
 
 [target.'cfg(target_os = "android")'.dependencies]

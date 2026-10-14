@@ -10,7 +10,7 @@
   <key>com.apple.security.cs.disable-library-validation</key>
   <true/>
 
-  <!-- Outbound network: required for AppScreens' HTTP calls (reqwest). -->
+  <!-- Outbound network: required for ShipScreen' HTTP calls (reqwest). -->
   <key>com.apple.security.network.client</key>
   <true/>
 

@@ -478,7 +478,7 @@ fn DoctorCard() -> Element {
     }
 }
 
-/// Point the Java card (and everything AppScreens runs) at `home`; "" is
+/// Point the Java card (and everything ShipScreen runs) at `home`; "" is
 /// Automatic.
 fn use_java(ws: Ws, home: &str) {
     let mut settings = ws.settings;
@@ -487,7 +487,7 @@ fn use_java(ws: Ws, home: &str) {
     java::set_preferred(home);
 }
 
-/// Which Java AppScreens builds with — every JDK on the machine, checked
+/// Which Java ShipScreen builds with — every JDK on the machine, checked
 /// against the project's Gradle version.
 #[component]
 fn JavaCard() -> Element {
@@ -547,7 +547,7 @@ fn JavaCard() -> Element {
                 }
             }
             p { class: "settings-hint",
-                "AppScreens runs keytool and Gradle with this Java — your terminal and system settings are left alone. "
+                "ShipScreen runs keytool and Gradle with this Java — your terminal and system settings are left alone. "
                 if detected { "The project builds with Gradle {gradle.0}.{gradle.1}." } else { "Gradle {gradle.0}.{gradle.1} assumed until the first Android build." }
             }
             if jdks().is_none() {
@@ -717,7 +717,7 @@ fn TerminalJava(jdk: java::Jdk, gradle: (u32, u32)) -> Element {
         let j = java::Jdk { home: Default::default(), major, version, source: "terminal" };
         java::incompatibility(&j, gradle).map(|p| {
             if up_to_date {
-                format!("New terminals run Java {major}: {p}. Something later in your shell setup overrides AppScreens' lines.")
+                format!("New terminals run Java {major}: {p}. Something later in your shell setup overrides ShipScreen' lines.")
             } else {
                 format!("New terminals run Java {major}: {p}. Click \"{}\" to switch them to Java {}.", if st.installed.is_some() { "Switch to this Java" } else { "Add to my terminal" }, jdk.major)
             }
@@ -735,7 +735,7 @@ fn TerminalJava(jdk: java::Jdk, gradle: (u32, u32)) -> Element {
                 }
             }
             p { class: "settings-hint",
-                "Optional — AppScreens doesn't need it. For running Gradle or other Java tools yourself. "
+                "Optional — ShipScreen doesn't need it. For running Gradle or other Java tools yourself. "
                 if up_to_date { "Already in {where_}." } else { "This goes at the end of {where_}:" }
             }
             if !up_to_date {
@@ -743,7 +743,7 @@ fn TerminalJava(jdk: java::Jdk, gradle: (u32, u32)) -> Element {
             }
             if !st.others.is_empty() {
                 p { class: "settings-hint",
-                    "{where_} also sets JAVA_HOME on line {st.others.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(\", \")}. AppScreens' lines come after, so they win; you can delete the old ones."
+                    "{where_} also sets JAVA_HOME on line {st.others.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(\", \")}. ShipScreen' lines come after, so they win; you can delete the old ones."
                 }
             }
             div { class: "install-actions",

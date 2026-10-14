@@ -12,7 +12,8 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-/// Keychain item service name for everything AppScreens stores.
+/// Keychain item service name for everything ShipScreen stores.
+// The app's name before ShipScreen: the passwords already saved are filed under it.
 const KEYCHAIN_SERVICE: &str = "AppScreens";
 
 /// Default folder for signing material, outside every project.
@@ -44,7 +45,7 @@ fn run(cmd: &mut Command) -> Result<String, String> {
 // Java (keytool, jarsigner, and Gradle's runtime)
 // ---------------------------------------------------------------------------
 
-/// The JDK home AppScreens uses — chosen in the Build step, else the
+/// The JDK home ShipScreen uses — chosen in the Build step, else the
 /// recommended one (see `java`). An app started from the Dock has no shell
 /// PATH, and macOS's /usr/bin/keytool is only a stub that asks for Java.
 pub(super) fn java_home() -> Option<PathBuf> {
@@ -74,7 +75,7 @@ pub(super) fn password_store_name() -> &'static str {
     }
 }
 
-/// Whether this OS has a password store AppScreens can use.
+/// Whether this OS has a password store ShipScreen can use.
 pub(super) fn has_password_store() -> bool {
     cfg!(target_os = "macos") || cfg!(windows)
 }
@@ -108,7 +109,7 @@ pub(super) fn keychain_set(account: &str, secret: &str) -> Result<(), String> {
 #[cfg(not(windows))]
 pub(super) fn keychain_set(account: &str, secret: &str) -> Result<(), String> {
     if !cfg!(target_os = "macos") {
-        return Err("This system has no password store AppScreens can use — put the password in the project's .env instead.".into());
+        return Err("This system has no password store ShipScreen can use — put the password in the project's .env instead.".into());
     }
     let quote = |s: &str| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""));
     let mut child = Command::new("security")
@@ -144,8 +145,8 @@ pub(super) fn keystore_aliases(keystore: &Path, password: &str) -> Result<Vec<St
     let out = run(Command::new(jdk_tool("keytool"))
         .args(["-list", "-keystore"])
         .arg(keystore)
-        .args(["-storepass:env", "APPSCREENS_KSP"])
-        .env("APPSCREENS_KSP", password))
+        .args(["-storepass:env", "SHIPSCREEN_KSP"])
+        .env("SHIPSCREEN_KSP", password))
     .map_err(|e| if e.contains("password was incorrect") { "Wrong keystore password".to_string() } else { e })?;
     Ok(out
         .lines()
@@ -190,8 +191,8 @@ pub(super) fn create_upload_key(keystore: &Path, alias: &str, password: &str, dn
         .args(["-genkeypair", "-noprompt", "-keystore"])
         .arg(keystore)
         .args(["-alias", alias, "-keyalg", "RSA", "-keysize", "2048", "-validity", "10000", "-dname", dname])
-        .args(["-storepass:env", "APPSCREENS_KSP", "-keypass:env", "APPSCREENS_KSP"])
-        .env("APPSCREENS_KSP", password))?;
+        .args(["-storepass:env", "SHIPSCREEN_KSP", "-keypass:env", "SHIPSCREEN_KSP"])
+        .env("SHIPSCREEN_KSP", password))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -203,8 +204,8 @@ pub(super) fn create_upload_key(keystore: &Path, alias: &str, password: &str, dn
         .arg(keystore)
         .args(["-alias", alias, "-file"])
         .arg(&pem)
-        .args(["-storepass:env", "APPSCREENS_KSP"])
-        .env("APPSCREENS_KSP", password))?;
+        .args(["-storepass:env", "SHIPSCREEN_KSP"])
+        .env("SHIPSCREEN_KSP", password))?;
     Ok(pem)
 }
 
@@ -229,8 +230,8 @@ pub(super) fn upload_key_fingerprint(keystore: &Path, alias: &str, password: &st
     let out = run(Command::new(jdk_tool("keytool"))
         .args(["-list", "-v", "-keystore"])
         .arg(keystore)
-        .args(["-alias", alias, "-storepass:env", "APPSCREENS_KSP"])
-        .env("APPSCREENS_KSP", password))?;
+        .args(["-alias", alias, "-storepass:env", "SHIPSCREEN_KSP"])
+        .env("SHIPSCREEN_KSP", password))?;
     out.lines()
         .find_map(|l| l.trim().strip_prefix("SHA256:").map(|f| f.trim().to_string()))
         .ok_or_else(|| "No SHA-256 fingerprint in keytool output".into())
@@ -269,7 +270,7 @@ pub(super) fn untrack_secrets(project: &Path, files: &[String]) -> Result<(), St
     let missing: Vec<&String> = files.iter().filter(|f| !existing.lines().any(|l| l.trim() == f.as_str())).collect();
     if !missing.is_empty() {
         let mut add = String::from(if existing.ends_with('\n') || existing.is_empty() { "" } else { "\n" });
-        add.push_str("\n# Secrets — never commit (added by AppScreens)\n");
+        add.push_str("\n# Secrets — never commit (added by ShipScreen)\n");
         for f in missing {
             add.push_str(f);
             add.push('\n');
@@ -323,9 +324,9 @@ pub(super) fn export_backup(sources: &[PathBuf], dest: &Path, password: &str) ->
     }
     let mut tar = tar.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| e.to_string())?;
     let out = Command::new("openssl")
-        .args(["enc", "-aes-256-cbc", "-pbkdf2", "-salt", "-pass", "env:APPSCREENS_BKP", "-out"])
+        .args(["enc", "-aes-256-cbc", "-pbkdf2", "-salt", "-pass", "env:SHIPSCREEN_BKP", "-out"])
         .arg(dest)
-        .env("APPSCREENS_BKP", password)
+        .env("SHIPSCREEN_BKP", password)
         .stdin(tar.stdout.take().ok_or("no tar output")?)
         .output()
         .map_err(|e| e.to_string())?;
@@ -387,9 +388,9 @@ pub(super) fn import_apple_identity(key: &Path, cert_der: &[u8], label: &str, p1
         .arg(key)
         .arg("-in")
         .arg(&pem)
-        .args(["-name", label, "-passout", "env:APPSCREENS_P12", "-out"])
+        .args(["-name", label, "-passout", "env:SHIPSCREEN_P12", "-out"])
         .arg(&p12)
-        .env("APPSCREENS_P12", p12_password));
+        .env("SHIPSCREEN_P12", p12_password));
     let _ = std::fs::remove_file(&pem);
     exported?;
     #[cfg(unix)]
@@ -454,7 +455,7 @@ mod tests {
 
     #[test]
     fn finds_upload_keystores_but_not_debug_or_apple_files() {
-        let dir = std::env::temp_dir().join("appscreens-test-find-keystores");
+        let dir = std::env::temp_dir().join("shipscreen-test-find-keystores");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("nested")).unwrap();
         for name in ["upload.jks", "old.keystore", "debug.keystore", "apple.p12", "notes.txt", "nested/deep.jks"] {
@@ -472,7 +473,7 @@ mod tests {
     }
 
     fn git_repo(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("appscreens-test-{name}"));
+        let dir = std::env::temp_dir().join(format!("shipscreen-test-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         Command::new("git").arg("init").arg("-q").arg(&dir).status().unwrap();
@@ -505,7 +506,7 @@ mod tests {
         if java_home().is_none() {
             return; // no JDK on this machine
         }
-        let dir = std::env::temp_dir().join("appscreens-test-keystore");
+        let dir = std::env::temp_dir().join("shipscreen-test-keystore");
         let _ = std::fs::remove_dir_all(&dir);
         let ks = dir.join("upload.jks");
         let pem = create_upload_key(&ks, "demo", "test-pass-123", &dname("Test", "", "CH")).unwrap();
@@ -518,7 +519,7 @@ mod tests {
 
     #[test]
     fn backup_round_trips() {
-        let dir = std::env::temp_dir().join("appscreens-test-backup");
+        let dir = std::env::temp_dir().join("shipscreen-test-backup");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("keys")).unwrap();
         std::fs::write(dir.join("keys/a.p8"), "secret").unwrap();

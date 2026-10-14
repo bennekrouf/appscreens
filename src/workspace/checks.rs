@@ -462,7 +462,7 @@ mod tests {
 </dict></plist>trailing-signature"#;
 
     fn write_profile(name: &str, body: &str) -> std::path::PathBuf {
-        let path = std::env::temp_dir().join(format!("appscreens-test-{name}.mobileprovision"));
+        let path = std::env::temp_dir().join(format!("shipscreen-test-{name}.mobileprovision"));
         std::fs::write(&path, body).unwrap();
         path
     }
@@ -490,7 +490,7 @@ mod tests {
     #[test]
     fn installs_a_profile_under_its_uuid() {
         let body = PROFILE.replace("<key>Name</key>", "<key>UUID</key>\n    <string>0bc1-test-uuid</string>\n    <key>Name</key>");
-        let folder = std::env::temp_dir().join("appscreens-test-profiles");
+        let folder = std::env::temp_dir().join("shipscreen-test-profiles");
         let _ = std::fs::remove_dir_all(&folder);
         let path = install_profile_in(&folder, body.as_bytes()).unwrap();
         assert_eq!(path, folder.join("0bc1-test-uuid.mobileprovision"));
@@ -537,7 +537,7 @@ mod tests {
 
     #[test]
     fn android_output_is_per_language_inside_the_project() {
-        let project = std::env::temp_dir().join("appscreens-test-android-out");
+        let project = std::env::temp_dir().join("shipscreen-test-android-out");
         let _ = std::fs::remove_dir_all(&project);
         let ios_dir = project.join("fastlane/screenshots/ios");
         let android_root = project.join("fastlane/metadata/android");
@@ -577,7 +577,7 @@ mod tests {
 
     #[test]
     fn desktop_sizes_are_exported_and_unticked_platforms_are_not() {
-        let project = std::env::temp_dir().join("appscreens-test-desktop-out");
+        let project = std::env::temp_dir().join("shipscreen-test-desktop-out");
         let _ = std::fs::remove_dir_all(&project);
         let mut p = ProjectState::with_defaults();
         p.platform_type = PlatformType::Desktop;
@@ -610,7 +610,7 @@ mod tests {
         assert!(script.contains(r#"KEY_ALIAS="${ANDROID_KEY_ALIAS:-nahw}""#));
         assert!(script.contains(r#"KEYSTORE_PATH="${ANDROID_KEYSTORE_PATH:-}""#));
         // The template is format!-escaped bash; make sure it still parses.
-        let path = std::env::temp_dir().join("appscreens-test-android-release.sh");
+        let path = std::env::temp_dir().join("shipscreen-test-android-release.sh");
         std::fs::write(&path, &script).unwrap();
         let check = std::process::Command::new("bash").arg("-n").arg(&path).output().unwrap();
         assert!(check.status.success(), "{}", String::from_utf8_lossy(&check.stderr));
@@ -618,7 +618,7 @@ mod tests {
 
     #[test]
     fn detects_an_existing_project_from_its_files() {
-        let dir = std::env::temp_dir().join("appscreens-test-detect");
+        let dir = std::env::temp_dir().join("shipscreen-test-detect");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("target/dx/tafseel-quran/release/ios")).unwrap();
         std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"tafseel-quran\"\nversion = \"1.1.0\"\n").unwrap();
@@ -631,7 +631,7 @@ mod tests {
         std::fs::write(dir.join("TafseelQuran.ipa"), "x").unwrap();
         std::fs::write(dir.join("build_number.txt"), "12\n").unwrap();
 
-        // What AppScreens had saved before it could detect anything.
+        // What ShipScreen had saved before it could detect anything.
         let mut p = ProjectState::with_defaults();
         p.version = "1.0".into();
         assert!(seed_identity(&mut p, &dir));
@@ -651,7 +651,7 @@ mod tests {
 
     #[test]
     fn a_build_script_and_the_last_android_build_win() {
-        let dir = std::env::temp_dir().join("appscreens-test-detect-scripts");
+        let dir = std::env::temp_dir().join("shipscreen-test-detect-scripts");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("target/dx/nahw/release/android/app/app")).unwrap();
         std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"nahw\"\n").unwrap();
@@ -677,7 +677,7 @@ mod tests {
 
     #[test]
     fn never_replaces_a_build_script_it_did_not_write() {
-        let dir = std::env::temp_dir().join("appscreens-test-own-scripts");
+        let dir = std::env::temp_dir().join("shipscreen-test-own-scripts");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let mine = "#!/bin/bash\n# my tuned script\nDISPLAY_NAME=\"Tafseel\"\n";
@@ -694,7 +694,7 @@ mod tests {
 
     #[test]
     fn seeds_numbers_after_the_last_used_ones() {
-        let dir = std::env::temp_dir().join("appscreens-test-seed");
+        let dir = std::env::temp_dir().join("shipscreen-test-seed");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("build_number.txt"), "14\n").unwrap();
         std::fs::write(dir.join("Dioxus.toml"), "[android]\nversion_code = 36\nversion_name = \"2.1.0\"\n").unwrap();

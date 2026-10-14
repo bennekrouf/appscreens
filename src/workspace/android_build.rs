@@ -1,6 +1,6 @@
-//! Android builds, run by AppScreens itself instead of a bash script, so they
+//! Android builds, run by ShipScreen itself instead of a bash script, so they
 //! work the same on macOS, Windows and Linux: `dx` generates the Gradle
-//! project, AppScreens fixes what dx gets wrong (icons, package name,
+//! project, ShipScreen fixes what dx gets wrong (icons, package name,
 //! version, signing), then Gradle builds the AAB or APK.
 //!
 //! The steps are the ones `build_android_release.sh` / `build_apk.sh` always
@@ -552,7 +552,7 @@ mod tests {
 
     #[test]
     fn picks_the_newest_version_folder() {
-        let dir = std::env::temp_dir().join("appscreens-test-ndk");
+        let dir = std::env::temp_dir().join("shipscreen-test-ndk");
         let _ = std::fs::remove_dir_all(&dir);
         for v in ["25.2.9519653", "26.1.10909125", "26.10.1", "notes"] {
             std::fs::create_dir_all(dir.join(v)).unwrap();
@@ -563,7 +563,7 @@ mod tests {
 
     #[test]
     fn replaces_icons_and_fixes_sources() {
-        let p = std::env::temp_dir().join("appscreens-test-android-fix");
+        let p = std::env::temp_dir().join("shipscreen-test-android-fix");
         let _ = std::fs::remove_dir_all(&p);
         let res = p.join("gen/res");
         std::fs::create_dir_all(res.join("mipmap-hdpi")).unwrap();

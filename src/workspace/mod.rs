@@ -106,7 +106,7 @@ impl Step {
 }
 
 /// Steps that apply to this project. Desktop projects have nothing to sign,
-/// build or submit here; the Android build of AppScreens can't run the bash
+/// build or submit here; the Android build of ShipScreen can't run the bash
 /// build scripts.
 fn visible_steps(platform: &PlatformType) -> Vec<Step> {
     let store_app = !platform.has_desktop();
@@ -829,7 +829,7 @@ pub(crate) fn ProjectView(project_dir: PathBuf, on_close: EventHandler<()>) -> E
         drawer_job: use_signal(|| JobKind::Screenshots),
     };
     use_context_provider(|| ws);
-    // The JDK chosen in the Build step applies to everything AppScreens runs.
+    // The JDK chosen in the Build step applies to everything ShipScreen runs.
     use_hook(move || java::set_preferred(&settings.peek().java_home));
 
     // Inspect each newly built bundle once (off the UI thread).
