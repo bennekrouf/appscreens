@@ -2239,3 +2239,39 @@ h2 {
 .update-banner-dismiss .icon { width: 14px; height: 14px; }
 .btn-generate .icon,
 .btn-publish .icon { width: 17px; height: 17px; }
+
+/* ------------------------------------------------------------------ */
+/* ShipScreen Pro                                                       */
+/* ------------------------------------------------------------------ */
+.pro-btn {
+    margin-top: var(--s4);
+    align-self: center;
+    padding: var(--s1) var(--s3);
+    border-radius: var(--r-sm);
+    border: 1px solid var(--violet);
+    background: transparent;
+    color: var(--violet);
+    font: inherit;
+    font-size: var(--fs-sm);
+    cursor: pointer;
+}
+.pro-btn:hover { background: var(--bg2); }
+.pro-btn.active { border-color: var(--blue); color: var(--blue); font-weight: 600; letter-spacing: .04em; }
+.pro-btn.renew { border-color: var(--yellow); color: var(--yellow); }
+.pro-popup { display: flex; flex-direction: column; gap: var(--s3); width: 480px; }
+.pro-popup p { margin: 0; color: var(--text2); }
+.pro-popup .settings-header { margin-bottom: 0; }
+.pro-ok { color: var(--green) !important; }
+.pro-error { color: var(--red) !important; font-size: var(--fs-sm); }
+.pro-actions { display: flex; flex-wrap: wrap; gap: var(--s2); justify-content: flex-end; }
+.licence-key {
+    width: 100%;
+    padding: var(--s2);
+    border-radius: var(--r-sm);
+    resize: vertical;
+    background: var(--bg0);
+    color: var(--text1);
+    border: 1px solid var(--border);
+    font-family: var(--mono);
+    font-size: var(--fs-xs);
+}

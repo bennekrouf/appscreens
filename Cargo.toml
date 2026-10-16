@@ -20,6 +20,8 @@ ab_glyph = "0.2"
 hex = "0.4"
 urlencoding = "2"
 base64 = "0.22"
+# Checks ShipScreen Pro licence keys, offline (see src/licence.rs).
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 # The anonymous install id for usage statistics: 128 random bits. Already
 # in the tree via other crates, so this names a dependency rather than adding one.
 getrandom = "0.3"
