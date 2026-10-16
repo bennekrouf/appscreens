@@ -154,6 +154,11 @@ jobs:
 
       # ── Build the .app bundle (no dmg yet — we build & sign our own) ────────
       - name: Bundle .app
+        env:
+          # Public half of the key mayorana.ch signs Pro licences with (repository
+          # variable, not a secret). Without it the build can't check licences,
+          # and runs without the free version's limit.
+          SHIPSCREEN_LICENSE_PUBLIC_KEY: ${{ vars.SHIPSCREEN_LICENSE_PUBLIC_KEY }}
         run: dx bundle --platform desktop --release --package-types macos
 
       # `dx bundle` leaves two .app trees in target/: the one it assembles
@@ -272,6 +277,11 @@ jobs:
         run: cargo install dioxus-cli --version 0.7.10 --locked  # keep in step with the dioxus version in Cargo.toml
 
       - name: Bundle
+        env:
+          # Public half of the key mayorana.ch signs Pro licences with (repository
+          # variable, not a secret). Without it the build can't check licences,
+          # and runs without the free version's limit.
+          SHIPSCREEN_LICENSE_PUBLIC_KEY: ${{ vars.SHIPSCREEN_LICENSE_PUBLIC_KEY }}
         run: dx bundle --platform desktop --release --package-types deb --package-types appimage
 
       - name: Collect artifacts
@@ -352,6 +362,10 @@ jobs:
 
       - name: Build
         env:
+          # Public half of the key mayorana.ch signs Pro licences with (repository
+          # variable, not a secret). Without it the build can't check licences,
+          # and runs without the free version's limit.
+          SHIPSCREEN_LICENSE_PUBLIC_KEY: ${{ vars.SHIPSCREEN_LICENSE_PUBLIC_KEY }}
           # Where anonymous usage statistics go (repository variable, not a
           # secret). Unset, the build sends nothing and never asks.
           MAYORANA_TELEMETRY_URL: ${{ vars.MAYORANA_TELEMETRY_URL }}

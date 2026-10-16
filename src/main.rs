@@ -12,6 +12,8 @@ use imageproc::drawing::{draw_text_mut, text_size};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+mod licence;
+mod pro;
 mod telemetry;
 mod update_check;
 mod notice;
@@ -1590,8 +1592,26 @@ fn App() -> Element {
     let mut settings = use_signal(load_settings);
     use_context_provider(|| settings);
 
+    // ShipScreen Pro: the free version works on one app (see pro.rs).
+    let mut pro = use_context_provider(|| pro::Pro {
+        open: Signal::new(false),
+        status: Signal::new(licence::current()),
+        pending: Signal::new(None),
+    });
+
     // Active project dir (None = show project picker)
     let mut project_dir = use_signal(|| Option::<PathBuf>::None);
+    // Opens a project folder and records it in recents. Every way in goes
+    // through here, after the Pro check.
+    let open_project = use_callback(move |dir: PathBuf| {
+        let mut s = settings.write();
+        s.recent_projects.retain(|p| p != &dir);
+        s.recent_projects.insert(0, dir.clone());
+        s.recent_projects.truncate(MAX_RECENT_PROJECTS);
+        save_settings(&s);
+        drop(s);
+        project_dir.set(Some(dir));
+    });
 
     // ── Theme (matches ais-runner) ────────────────────────────────────────
     // Initialise from system, then keep in sync — but stop syncing once the
@@ -1813,17 +1833,18 @@ fn App() -> Element {
             if *is_light.read() { {icon_moon()} } else { {icon_sun()} }
         }
 
+        pro::ProWindow { on_open: open_project }
+
         if project_dir.read().is_none() {
             ProjectPicker {
                 on_open: move |dir: PathBuf| {
-                    // Record in recents
-                    let mut s = settings.write();
-                    s.recent_projects.retain(|p| p != &dir);
-                    s.recent_projects.insert(0, dir.clone());
-                    s.recent_projects.truncate(MAX_RECENT_PROJECTS);
-                    save_settings(&s);
-                    drop(s);
-                    project_dir.set(Some(dir));
+                    // Without Pro, a second app asks for Pro first.
+                    if pro::may_open(&pro.status.read(), &dir) {
+                        open_project.call(dir);
+                    } else {
+                        pro.pending.set(Some(dir));
+                        pro.open.set(true);
+                    }
                 }
             }
         } else {
@@ -1974,6 +1995,7 @@ fn ProjectPicker(on_open: EventHandler<PathBuf>) -> Element {
                     }
                     {open_existing_button(on_open.clone())}
                 }
+                pro::ProButton {}
 
                 // ── New Project wizard (inline) ──────────────────────────────
                 if *show_new.read() {

@@ -15,6 +15,18 @@ Each heading is dated on the day its tag was pushed. Releases that carried only
 build or packaging work say so rather than being hidden: the version numbers a
 user sees in the update prompt should all be accounted for.
 
+## [Unreleased]
+
+### Added
+
+- ShipScreen Pro. The free version works on one app, with every step from
+  build to store submission; Pro works on any number of apps, and is the
+  licence for commercial use. The first app you open becomes your free app.
+  Opening another one asks for Pro, or offers to make that one your free app
+  instead. Buy it on [ShipScreen's page](https://mayorana.ch/en/apps/shipscreen),
+  then click **Get Pro…** on the start screen and paste the key. The key is
+  checked on your computer: no account, nothing sent anywhere.
+
 ## [0.1.26] - 2026-10-14
 
 ### Changed
